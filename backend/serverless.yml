@@ -1,0 +1,204 @@
+service: tokentrim-api
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  memorySize: 256
+  timeout: 30
+  
+  environment:
+    DYNAMODB_TABLE: ${self:service}-${self:provider.stage}
+    JWT_SECRET: ${env:JWT_SECRET, 'your-jwt-secret-change-in-production'}
+    STRIPE_SECRET_KEY: ${env:STRIPE_SECRET_KEY, ''}
+    STRIPE_WEBHOOK_SECRET: ${env:STRIPE_WEBHOOK_SECRET, ''}
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}/index/*"
+
+  httpApi:
+    cors:
+      allowedOrigins:
+        - http://localhost:3000
+        - https://tokentrim.com
+        - https://*.tokentrim.com
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+        - X-Api-Key
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowCredentials: true
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
+
+custom:
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    exclude: ['@aws-sdk/*']
+    target: 'node18'
+    define:
+      'require.resolve': undefined
+    platform: 'node'
+    concurrency: 10
+
+functions:
+  # Auth Functions
+  authRegister:
+    handler: handlers/auth.register
+    events:
+      - httpApi:
+          path: /auth/register
+          method: post
+
+  authLogin:
+    handler: handlers/auth.login
+    events:
+      - httpApi:
+          path: /auth/login
+          method: post
+
+  authSync:
+    handler: handlers/auth.sync
+    events:
+      - httpApi:
+          path: /auth/sync
+          method: post
+
+  # User Functions
+  getUser:
+    handler: handlers/users.getUser
+    events:
+      - httpApi:
+          path: /users
+          method: get
+
+  updateSubscription:
+    handler: handlers/users.updateSubscription
+    events:
+      - httpApi:
+          path: /users/subscription
+          method: post
+
+  # API Key Functions
+  getKeys:
+    handler: handlers/keys.getKeys
+    events:
+      - httpApi:
+          path: /keys
+          method: get
+
+  createKey:
+    handler: handlers/keys.createKey
+    events:
+      - httpApi:
+          path: /keys
+          method: post
+
+  deleteKey:
+    handler: handlers/keys.deleteKey
+    events:
+      - httpApi:
+          path: /keys
+          method: delete
+
+  validateKey:
+    handler: handlers/keys.validateKey
+    events:
+      - httpApi:
+          path: /keys/validate
+          method: post
+
+  # Optimization Functions
+  optimize:
+    handler: handlers/optimize.optimize
+    timeout: 60
+    events:
+      - httpApi:
+          path: /optimize
+          method: post
+
+  # Usage Tracking
+  trackUsage:
+    handler: handlers/usage.track
+    events:
+      - httpApi:
+          path: /usage/track
+          method: post
+
+  getUsage:
+    handler: handlers/usage.getUsage
+    events:
+      - httpApi:
+          path: /usage
+          method: get
+
+resources:
+  Resources:
+    TokenTrimTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          - AttributeName: GSI1PK
+            AttributeType: S
+          - AttributeName: GSI1SK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: GSI1
+            KeySchema:
+              - AttributeName: GSI1PK
+                KeyType: HASH
+              - AttributeName: GSI1SK
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+
+
+
+
+
+
+
+
+
+
+
+
+

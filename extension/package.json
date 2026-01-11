@@ -1,0 +1,147 @@
+{
+  "name": "tokentrim",
+  "displayName": "TokenTrim - AI Prompt Optimizer",
+  "description": "Optimize your AI prompts in real-time. Reduce token costs and get better LLM responses.",
+  "version": "1.0.0",
+  "publisher": "tokentrim",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tokentrim/tokentrim-vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "AI",
+    "prompt",
+    "optimization",
+    "tokens",
+    "LLM",
+    "ChatGPT",
+    "Copilot",
+    "Claude"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tokentrim.openPanel",
+        "title": "TokenTrim: Open Panel",
+        "icon": "$(scissors)"
+      },
+      {
+        "command": "tokentrim.setApiKey",
+        "title": "TokenTrim: Set API Key"
+      },
+      {
+        "command": "tokentrim.optimizeSelection",
+        "title": "TokenTrim: Optimize Selection"
+      },
+      {
+        "command": "tokentrim.clearApiKey",
+        "title": "TokenTrim: Clear API Key"
+      },
+      {
+        "command": "tokentrim.copyOptimized",
+        "title": "TokenTrim: Copy Optimized Prompt"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tokentrim-sidebar",
+          "title": "TokenTrim",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tokentrim-sidebar": [
+        {
+          "type": "webview",
+          "id": "tokentrim.chatPanel",
+          "name": "Prompt Optimizer"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "tokentrim.openPanel",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      },
+      {
+        "command": "tokentrim.optimizeSelection",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "tokentrim.copyOptimized",
+        "key": "ctrl+shift+c",
+        "mac": "cmd+shift+c",
+        "when": "view.tokentrim.chatPanel.visible"
+      }
+    ],
+    "configuration": {
+      "title": "TokenTrim",
+      "properties": {
+        "tokentrim.apiUrl": {
+          "type": "string",
+          "default": "https://api.tokentrim.com",
+          "description": "TokenTrim API URL"
+        },
+        "tokentrim.autoOptimize": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically optimize prompts as you type"
+        },
+        "tokentrim.optimizeDelay": {
+          "type": "number",
+          "default": 500,
+          "description": "Delay in milliseconds before auto-optimization"
+        },
+        "tokentrim.showTokenCount": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show token count in the panel"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tokentrim.optimizeSelection",
+          "when": "editorHasSelection",
+          "group": "tokentrim"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run compile -- --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.11",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
+
