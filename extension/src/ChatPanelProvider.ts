@@ -3,27 +3,54 @@ import { ApiClient } from './ApiClient';
 import { LocalOptimizer } from './optimizer/LocalOptimizer';
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'tokentrim.chatPanel';
+  
   private _view?: vscode.WebviewView;
-  private _hasApiKey: boolean = false;
   private _lastOptimizedText: string = '';
+  private localOptimizer: LocalOptimizer;
+
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly apiClient: ApiClient
+  ) {
+    this.localOptimizer = new LocalOptimizer();
+  }
 
   // Copy the last optimized result to clipboard
   public async copyOptimized(): Promise<boolean> {
     if (this._lastOptimizedText) {
       await vscode.env.clipboard.writeText(this._lastOptimizedText);
       vscode.window.showInformationMessage('Optimized prompt copied!');
-      // Tell webview to show flash animation
       this._view?.webview.postMessage({ type: 'showCopyFlash' });
       return true;
     }
     return false;
   }
 
-  constructor(
-    private readonly context: vscode.ExtensionContext,
-    private readonly apiClient: ApiClient,
-    private readonly localOptimizer: LocalOptimizer
-  ) {}
+  // Clear input
+  public clearInput(): void {
+    this._view?.webview.postMessage({ type: 'clearInput' });
+  }
+
+  // Update auth status in UI
+  public updateAuthStatus(): void {
+    if (!this._view) return;
+
+    const isLoggedIn = this.apiClient.isLoggedIn();
+    const session = this.apiClient.getSession();
+    const status = this.apiClient.getSubscriptionStatus();
+
+    this._view.webview.postMessage({
+      type: 'authStatus',
+      isLoggedIn,
+      email: session?.email,
+      name: session?.name,
+      subscriptionStatus: status.status,
+      subscriptionValid: status.valid,
+      trialDaysRemaining: status.trialDaysRemaining,
+      message: status.message,
+    });
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -43,28 +70,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.type) {
         case 'optimize': {
-          try {
-            // Use local optimization - works offline!
-            const localResult = this.localOptimizer.optimize(data.text);
-            this._lastOptimizedText = localResult.optimized;
+          // Check if user can optimize - subscription required
+          const status = this.apiClient.getSubscriptionStatus();
+          if (!status.valid) {
             this._view?.webview.postMessage({
-              type: 'localResult',
-              result: localResult,
+              type: 'blocked',
+              message: status.message || 'Please sign in or subscribe to use TokenTrim.',
             });
+            return;
+          }
 
-            // Only try server if API key is set AND not in local mode
-            if (this.apiClient.hasApiKey() && !this.apiClient.isLocalMode()) {
-              try {
-                const serverResult = await this.apiClient.optimize(data.text);
-                this._view?.webview.postMessage({
-                  type: 'serverResult',
-                  result: serverResult,
-                });
-              } catch (serverError: any) {
-                // Silently fall back to local result if server fails
-                console.log('Server optimization failed, using local result:', serverError.message);
-              }
-            }
+          try {
+            const result = this.localOptimizer.optimize(data.text);
+            this._lastOptimizedText = result.optimized;
+            this._view?.webview.postMessage({
+              type: 'result',
+              result,
+            });
           } catch (error: any) {
             this._view?.webview.postMessage({
               type: 'error',
@@ -80,31 +102,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'setApiKey': {
-          vscode.commands.executeCommand('tokentrim.setApiKey');
+        case 'login': {
+          vscode.commands.executeCommand('tokentrim.login');
+          break;
+        }
+
+        case 'logout': {
+          vscode.commands.executeCommand('tokentrim.logout');
+          break;
+        }
+
+        case 'subscribe': {
+          vscode.commands.executeCommand('tokentrim.subscribe');
           break;
         }
 
       }
     });
 
-    // Update API key status
-    this._view.webview.postMessage({
-      type: 'apiKeyStatus',
-      hasApiKey: this._hasApiKey,
-      isLocalMode: this.apiClient.isLocalMode(),
-    });
-  }
-
-  public updateApiKeyStatus(hasApiKey: boolean) {
-    this._hasApiKey = hasApiKey;
-    if (this._view) {
-      this._view.webview.postMessage({
-        type: 'apiKeyStatus',
-        hasApiKey,
-        isLocalMode: this.apiClient.isLocalMode(),
-      });
-    }
+    // Send initial auth status
+    this.updateAuthStatus();
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
@@ -117,24 +134,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <style>
     :root {
       --trim-green: #22c55e;
-      --trim-green-light: #4ade80;
       --trim-green-dark: #16a34a;
       --bg-primary: var(--vscode-editor-background);
-      --bg-secondary: var(--vscode-sideBar-background);
       --text-primary: var(--vscode-editor-foreground);
       --text-secondary: var(--vscode-descriptionForeground);
       --border: var(--vscode-panel-border);
       --input-bg: var(--vscode-input-background);
       --input-border: var(--vscode-input-border);
-      --button-bg: var(--vscode-button-background);
-      --button-fg: var(--vscode-button-foreground);
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: var(--vscode-font-family);
@@ -176,21 +185,135 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
     }
 
-    .api-status {
+    .auth-status {
       font-size: 11px;
       padding: 4px 8px;
       border-radius: 12px;
       cursor: pointer;
+      transition: all 0.2s;
     }
 
-    .api-status.connected {
+    .auth-status.signed-in {
       background: rgba(34, 197, 94, 0.2);
       color: var(--trim-green);
     }
 
-    .api-status.disconnected {
-      background: rgba(239, 68, 68, 0.2);
+    .auth-status.signed-out {
+      background: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+    }
+
+    .auth-status.signed-out:hover {
+      background: rgba(59, 130, 246, 0.3);
+    }
+
+    .auth-status.local {
+      background: rgba(168, 85, 247, 0.2);
+      color: #a855f7;
+    }
+
+    /* Warning banner */
+    .warning-banner {
+      background: rgba(234, 179, 8, 0.15);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+
+    .warning-banner.error {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .warning-banner .title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #eab308;
+    }
+
+    .warning-banner.error .title {
       color: #ef4444;
+    }
+
+    .warning-banner .message {
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .warning-banner button {
+      background: #eab308;
+      color: #000;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .warning-banner.error button {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    /* Login prompt */
+    .login-prompt {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      gap: 16px;
+    }
+
+    .login-prompt h3 {
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+
+    .login-prompt p {
+      color: var(--text-secondary);
+      font-size: 12px;
+      max-width: 250px;
+      line-height: 1.5;
+    }
+
+    .login-prompt .btn-login {
+      background: var(--trim-green);
+      color: #000;
+      padding: 10px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    .login-prompt .btn-login:hover {
+      background: var(--trim-green-dark);
+    }
+
+    .login-prompt .link {
+      font-size: 11px;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .login-prompt .link:hover {
+      color: #a855f7;
+    }
+
+    /* Main content */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     .input-section {
@@ -201,7 +324,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       min-height: 0;
     }
 
-    .input-label {
+    .label-row {
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -209,16 +332,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       align-items: center;
       justify-content: space-between;
-    }
-
-    .output-label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--text-secondary);
-      display: flex;
-      align-items: center;
-      gap: 6px;
     }
 
     .token-count {
@@ -278,12 +391,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-weight: 600;
     }
 
-    .savings-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
     .output-container {
       flex: 1;
       background: var(--input-bg);
@@ -300,11 +407,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       user-select: text;
     }
 
-    .output-container:focus {
-      outline: 2px solid var(--trim-green);
-      outline-offset: -2px;
-    }
-
     .output-container.copied {
       animation: copyFlash 0.3s ease;
     }
@@ -312,6 +414,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     @keyframes copyFlash {
       0% { background: rgba(34, 197, 94, 0.3); }
       100% { background: var(--input-bg); }
+    }
+
+    .placeholder {
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+
+    .error-msg {
+      color: #ef4444;
+      font-size: 12px;
+      padding: 8px;
+      background: rgba(239, 68, 68, 0.1);
+      border-radius: 4px;
     }
 
     .copy-hint {
@@ -358,60 +473,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-color: var(--trim-green);
       color: var(--trim-green);
     }
-
-    .placeholder {
-      color: var(--text-secondary);
-      font-style: italic;
-    }
-
-    .loading {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--text-secondary);
-    }
-
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid var(--border);
-      border-top-color: var(--trim-green);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .error {
-      color: #ef4444;
-      font-size: 12px;
-      padding: 8px;
-      background: rgba(239, 68, 68, 0.1);
-      border-radius: 4px;
-    }
-
-    .no-api-key {
-      text-align: center;
-      padding: 24px;
-      color: var(--text-secondary);
-    }
-
-    .no-api-key button {
-      margin-top: 12px;
-    }
-
-    /* Intent badge */
-    .intent-badge {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 4px;
-      background: rgba(34, 197, 94, 0.1);
-      color: var(--trim-green);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
   </style>
 </head>
 <body>
@@ -420,86 +481,101 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div class="logo-icon">✂</div>
       <span>TokenTrim</span>
     </div>
-    <div id="apiStatus" class="api-status disconnected" onclick="setApiKey()">
-      Click to Setup
+    <div id="authStatus" class="auth-status signed-out" onclick="handleAuthClick()">
+      Sign In
     </div>
   </div>
 
-  <div class="input-section">
-    <div class="input-label">
-      <span>Your Prompt</span>
-      <span class="token-count" id="inputTokens">~0 tokens</span>
-    </div>
-    <div class="textarea-container">
-      <textarea 
-        id="inputText" 
-        placeholder="Type or paste your prompt here...&#10;&#10;TokenTrim will automatically optimize it to reduce tokens and improve clarity."
-      ></textarea>
-    </div>
+  <div id="warningBanner" class="warning-banner" style="display: none;">
+    <div class="title" id="warningTitle"></div>
+    <div class="message" id="warningMessage"></div>
+    <button onclick="handleWarningAction()" id="warningButton">Subscribe</button>
   </div>
 
-  <div class="output-section">
-    <div class="output-header">
-      <div class="output-label">
-        <span>Optimized</span>
-        <span class="token-count" id="outputTokens">~0 tokens</span>
+  <div id="loginPrompt" class="login-prompt">
+    <h3>Welcome to TokenTrim ✂️</h3>
+    <p>Optimize your prompts to save tokens and get better AI responses.</p>
+    <button class="btn-login" onclick="handleLogin()">Sign In to Get Started</button>
+  </div>
+
+  <div id="mainContent" class="main-content" style="display: none;">
+    <div class="input-section">
+      <div class="label-row">
+        <span>Your Prompt</span>
+        <span class="token-count" id="inputTokens">~0 tokens</span>
       </div>
-      <div class="savings-row">
+      <div class="textarea-container">
+        <textarea 
+          id="inputText" 
+          placeholder="Type or paste your prompt here...&#10;&#10;TokenTrim will automatically optimize it."
+        ></textarea>
+      </div>
+    </div>
+
+    <div class="output-section">
+      <div class="output-header">
+        <div class="label-row">
+          <span>Optimized</span>
+          <span class="token-count" id="outputTokens">~0 tokens</span>
+        </div>
         <span class="savings-badge" id="savings" style="display: none;">-0%</span>
       </div>
-    </div>
-    <div class="output-container" id="outputText" tabindex="0">
-      <span class="placeholder">Optimized prompt will appear here...</span>
-    </div>
-    <div class="copy-hint" id="copyHint">Click to select • Ctrl+Shift+C copy • Ctrl+Shift+X clear</div>
-    <div class="actions">
-      <button class="btn-secondary" onclick="clearInput()" title="Clear input (Ctrl+Shift+X)">
-        ✕ Clear
-      </button>
-      <button class="btn-primary" onclick="copyToClipboard()">
-        📋 Copy
-      </button>
+      <div class="output-container" id="outputText" tabindex="0">
+        <span class="placeholder">Optimized prompt will appear here...</span>
+      </div>
+      <div class="copy-hint">Click to select • Ctrl+Shift+C copy • Ctrl+Shift+X clear</div>
+      <div class="actions">
+        <button class="btn-secondary" onclick="clearInput()">✕ Clear</button>
+        <button class="btn-primary" onclick="copyToClipboard()">📋 Copy</button>
+      </div>
     </div>
   </div>
 
   <script>
     const vscode = acquireVsCodeApi();
     
-    let hasApiKey = false;
-    let optimizeTimeout = null;
+    let isLoggedIn = false;
+    let subscriptionValid = false;
     let currentResult = null;
+    let optimizeTimeout = null;
 
+    const authStatus = document.getElementById('authStatus');
+    const loginPrompt = document.getElementById('loginPrompt');
+    const mainContent = document.getElementById('mainContent');
+    const warningBanner = document.getElementById('warningBanner');
     const inputText = document.getElementById('inputText');
     const outputText = document.getElementById('outputText');
     const inputTokens = document.getElementById('inputTokens');
     const outputTokens = document.getElementById('outputTokens');
     const savings = document.getElementById('savings');
-    const apiStatus = document.getElementById('apiStatus');
 
-    // Estimate tokens locally
     function estimateTokens(text) {
       if (!text) return 0;
       const hasCode = text.includes('\`\`\`') || text.includes('\`');
-      const multiplier = hasCode ? 3.5 : 4;
-      return Math.ceil(text.length / multiplier);
+      return Math.ceil(text.length / (hasCode ? 3.5 : 4));
     }
 
-    // Update input token count
+    function updateUI() {
+      // Only show main content if logged in AND has valid subscription
+      if (isLoggedIn && subscriptionValid) {
+        loginPrompt.style.display = 'none';
+        mainContent.style.display = 'flex';
+      } else {
+        loginPrompt.style.display = 'flex';
+        mainContent.style.display = 'none';
+      }
+    }
+
+    // Input handling
     inputText.addEventListener('input', () => {
       const tokens = estimateTokens(inputText.value);
       inputTokens.textContent = '~' + tokens + ' tokens';
 
-      // Debounce optimization
-      if (optimizeTimeout) {
-        clearTimeout(optimizeTimeout);
-      }
+      if (optimizeTimeout) clearTimeout(optimizeTimeout);
 
       if (inputText.value.trim()) {
         optimizeTimeout = setTimeout(() => {
-          vscode.postMessage({
-            type: 'optimize',
-            text: inputText.value
-          });
+          vscode.postMessage({ type: 'optimize', text: inputText.value });
         }, 500);
       } else {
         outputText.innerHTML = '<span class="placeholder">Optimized prompt will appear here...</span>';
@@ -508,51 +584,114 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    // Handle messages from extension
-    window.addEventListener('message', event => {
-      const message = event.data;
+    inputText.addEventListener('click', () => inputText.select());
 
-      switch (message.type) {
-        case 'localResult':
-        case 'serverResult':
-          currentResult = message.result;
-          outputText.textContent = message.result.optimized;
-          outputTokens.textContent = '~' + message.result.optimizedTokens + ' tokens';
-          savings.textContent = '-' + message.result.savings + '%';
+    // Output handling
+    outputText.addEventListener('click', () => {
+      if (currentResult) {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(outputText);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    });
+
+    // Message handling
+    window.addEventListener('message', event => {
+      const msg = event.data;
+
+      switch (msg.type) {
+        case 'authStatus':
+          isLoggedIn = msg.isLoggedIn;
+          subscriptionValid = msg.subscriptionValid || false;
+          
+          if (msg.isLoggedIn) {
+            if (msg.subscriptionStatus === 'trialing' && msg.trialDaysRemaining) {
+              authStatus.textContent = '✓ Trial (' + msg.trialDaysRemaining + 'd)';
+            } else if (msg.subscriptionStatus === 'active') {
+              authStatus.textContent = '✓ Pro';
+            } else {
+              authStatus.textContent = '⚠️ ' + (msg.email || 'Signed In');
+            }
+            authStatus.className = 'auth-status signed-in';
+            
+            // Show warning if needed
+            if (!msg.subscriptionValid) {
+              warningBanner.style.display = 'block';
+              warningBanner.className = 'warning-banner error';
+              document.getElementById('warningTitle').textContent = '🚫 Subscription Required';
+              document.getElementById('warningMessage').textContent = msg.message || 'Please subscribe to continue.';
+              document.getElementById('warningButton').textContent = 'Subscribe Now';
+            } else if (msg.trialDaysRemaining && msg.trialDaysRemaining <= 2) {
+              warningBanner.style.display = 'block';
+              warningBanner.className = 'warning-banner';
+              document.getElementById('warningTitle').textContent = '⚠️ Trial Ending Soon';
+              document.getElementById('warningMessage').textContent = 'Your trial ends in ' + msg.trialDaysRemaining + ' day(s).';
+              document.getElementById('warningButton').textContent = 'Subscribe Now';
+            } else {
+              warningBanner.style.display = 'none';
+            }
+          } else {
+            authStatus.textContent = 'Sign In';
+            authStatus.className = 'auth-status signed-out';
+            warningBanner.style.display = 'none';
+          }
+          
+          updateUI();
+          break;
+
+        case 'result':
+          currentResult = msg.result;
+          outputText.textContent = msg.result.optimized;
+          outputTokens.textContent = '~' + msg.result.optimizedTokens + ' tokens';
+          savings.textContent = '-' + msg.result.savings + '%';
           savings.style.display = 'inline';
           break;
 
-        case 'error':
-          outputText.innerHTML = '<div class="error">' + message.message + '</div>';
+        case 'blocked':
+          warningBanner.style.display = 'block';
+          warningBanner.className = 'warning-banner error';
+          document.getElementById('warningTitle').textContent = '🚫 Access Required';
+          document.getElementById('warningMessage').textContent = msg.message;
+          outputText.innerHTML = '<div class="error-msg">' + msg.message + '</div>';
           break;
 
-        case 'apiKeyStatus':
-          hasApiKey = message.hasApiKey;
-          if (hasApiKey) {
-            apiStatus.textContent = message.isLocalMode ? '🧪 Local Mode' : '✓ Connected';
-            apiStatus.classList.remove('disconnected');
-            apiStatus.classList.add('connected');
-          } else {
-            apiStatus.textContent = 'Click to Setup';
-            apiStatus.classList.remove('connected');
-            apiStatus.classList.add('disconnected');
-          }
+        case 'error':
+          outputText.innerHTML = '<div class="error-msg">' + msg.message + '</div>';
           break;
 
         case 'showCopyFlash':
           outputText.classList.add('copied');
           setTimeout(() => outputText.classList.remove('copied'), 300);
           break;
+
+        case 'clearInput':
+          clearInput();
+          break;
       }
     });
 
+    function handleAuthClick() {
+      if (isLoggedIn) {
+        vscode.postMessage({ type: 'logout' });
+      } else {
+        vscode.postMessage({ type: 'login' });
+      }
+    }
+
+    function handleLogin() {
+      vscode.postMessage({ type: 'login' });
+    }
+
+
+    function handleWarningAction() {
+      vscode.postMessage({ type: 'subscribe' });
+    }
+
     function copyToClipboard() {
       if (currentResult) {
-        vscode.postMessage({
-          type: 'copy',
-          text: currentResult.optimized
-        });
-        // Visual feedback
+        vscode.postMessage({ type: 'copy', text: currentResult.optimized });
         outputText.classList.add('copied');
         setTimeout(() => outputText.classList.remove('copied'), 300);
       }
@@ -568,50 +707,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       inputText.focus();
     }
 
-    function setApiKey() {
-      vscode.postMessage({ type: 'setApiKey' });
-    }
-
-    // Click to select all text in output
-    outputText.addEventListener('click', () => {
-      if (currentResult) {
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(outputText);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-    });
-
-    // Click to select all text in input
-    inputText.addEventListener('click', () => {
-      inputText.select();
-    });
-
-    // Keyboard shortcut: Ctrl+C when output is focused
-    outputText.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        // Let native copy work since text is selected
-        // But also copy via extension for notification
-        if (currentResult) {
-          vscode.postMessage({
-            type: 'copy',
-            text: currentResult.optimized
-          });
-          outputText.classList.add('copied');
-          setTimeout(() => outputText.classList.remove('copied'), 300);
-        }
-      }
-    });
-
-    // Global keyboard shortcuts
+    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Ctrl+Shift+C to copy optimized
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
         e.preventDefault();
         copyToClipboard();
       }
-      // Ctrl+Shift+X to clear input
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'X') {
         e.preventDefault();
         clearInput();
@@ -622,4 +723,3 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 }
-

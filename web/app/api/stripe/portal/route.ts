@@ -14,16 +14,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { customerId } = await req.json();
-
-    if (!customerId) {
-      return NextResponse.json(
-        { error: 'Customer ID required' },
-        { status: 400 }
-      );
-    }
-
-    const portalSession = await createCustomerPortalSession(customerId);
+    const portalSession = await createCustomerPortalSession(session.user.email);
 
     return NextResponse.json({ url: portalSession.url });
   } catch (error: any) {
@@ -34,19 +25,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

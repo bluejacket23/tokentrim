@@ -46,10 +46,20 @@ coverage/
 extension/*.vsix
 extension/dist/
 
+# Local database files
+*.local-db.json
+.local-db.json
+
 # Misc
 .cache/
 .temp/
 *.bak
+
+
+
+
+
+
 
 
 

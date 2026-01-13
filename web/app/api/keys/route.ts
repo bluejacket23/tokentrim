@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST - Create a new API key
+// POST - Create a new API key (generated server-side and emailed to user)
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -54,10 +54,7 @@ export async function POST(req: NextRequest) {
 
     const { name } = await req.json();
 
-    // Generate a new API key
-    const apiKey = `tt_${nanoid(32)}`;
-
-    // Save to Lambda/DynamoDB
+    // Backend generates key and emails it to user
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/keys`, {
       method: 'POST',
       headers: {
@@ -65,19 +62,26 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         email: session.user.email,
-        userId: (session.user as any).id || session.user.email,
-        name: name || 'Default Key',
-        key: apiKey,
+        name: name || 'My API Key',
       }),
     });
 
+    const data = await response.json();
+    
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Failed to create key');
+      return NextResponse.json(
+        { error: data.error || data.message || 'Failed to create key' },
+        { status: response.status }
+      );
     }
 
-    const data = await response.json();
-    return NextResponse.json({ ...data, key: apiKey });
+    // Key was created and emailed - don't return the actual key
+    return NextResponse.json({
+      id: data.id,
+      name: data.name,
+      message: data.message || 'API key created and sent to your email!',
+      emailSent: data.emailSent,
+    });
   } catch (error: any) {
     console.error('Create key error:', error);
     return NextResponse.json(
@@ -126,6 +130,7 @@ export async function DELETE(req: NextRequest) {
     );
   }
 }
+
 
 
 

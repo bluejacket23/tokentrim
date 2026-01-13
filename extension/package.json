@@ -2,7 +2,7 @@
   "name": "tokentrim",
   "displayName": "TokenTrim - AI Prompt Optimizer",
   "description": "Optimize your AI prompts in real-time. Reduce token costs and get better LLM responses.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "tokentrim",
   "repository": {
     "type": "git",
@@ -38,20 +38,28 @@
         "icon": "$(scissors)"
       },
       {
-        "command": "tokentrim.setApiKey",
-        "title": "TokenTrim: Set API Key"
+        "command": "tokentrim.login",
+        "title": "TokenTrim: Sign In"
+      },
+      {
+        "command": "tokentrim.logout",
+        "title": "TokenTrim: Sign Out"
+      },
+      {
+        "command": "tokentrim.subscribe",
+        "title": "TokenTrim: Subscribe"
       },
       {
         "command": "tokentrim.optimizeSelection",
         "title": "TokenTrim: Optimize Selection"
       },
       {
-        "command": "tokentrim.clearApiKey",
-        "title": "TokenTrim: Clear API Key"
-      },
-      {
         "command": "tokentrim.copyOptimized",
         "title": "TokenTrim: Copy Optimized Prompt"
+      },
+      {
+        "command": "tokentrim.clearInput",
+        "title": "TokenTrim: Clear Input"
       }
     ],
     "viewsContainers": {
@@ -89,6 +97,12 @@
         "key": "ctrl+shift+c",
         "mac": "cmd+shift+c",
         "when": "view.tokentrim.chatPanel.visible"
+      },
+      {
+        "command": "tokentrim.clearInput",
+        "key": "ctrl+shift+x",
+        "mac": "cmd+shift+x",
+        "when": "view.tokentrim.chatPanel.visible"
       }
     ],
     "configuration": {
@@ -99,6 +113,11 @@
           "default": "https://api.tokentrim.com",
           "description": "TokenTrim API URL"
         },
+        "tokentrim.webUrl": {
+          "type": "string",
+          "default": "https://tokentrim.com",
+          "description": "TokenTrim website URL"
+        },
         "tokentrim.autoOptimize": {
           "type": "boolean",
           "default": true,
@@ -108,11 +127,6 @@
           "type": "number",
           "default": 500,
           "description": "Delay in milliseconds before auto-optimization"
-        },
-        "tokentrim.showTokenCount": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show token count in the panel"
         }
       }
     },

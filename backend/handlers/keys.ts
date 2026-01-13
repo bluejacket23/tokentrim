@@ -8,12 +8,23 @@ import {
   deleteApiKey,
   updateKeyLastUsed,
   getUser,
+  hasValidAccess,
 } from '../lib/dynamodb';
+import { sendApiKeyEmail } from '../lib/email';
 import { success, badRequest, unauthorized, forbidden, notFound, serverError } from '../lib/response';
 
 // Hash API key for storage
 function hashKey(key: string): string {
   return crypto.createHash('sha256').update(key).digest('hex');
+}
+
+// Calculate trial days remaining
+function getTrialDaysRemaining(trialEndsAt?: string): number {
+  if (!trialEndsAt) return 0;
+  const now = new Date();
+  const trialEnd = new Date(trialEndsAt);
+  const diffMs = trialEnd.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(diffMs / (24 * 60 * 60 * 1000)));
 }
 
 export async function getKeys(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
@@ -42,17 +53,23 @@ export async function getKeys(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   }
 }
 
+// Generate a secure random API key
+function generateApiKey(): string {
+  const randomBytes = crypto.randomBytes(24);
+  return 'tt_' + randomBytes.toString('base64url');
+}
+
 export async function createKey(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   try {
     const body = JSON.parse(event.body || '{}');
-    const { email, userId, name, key } = body;
+    const { email, name } = body;
 
-    if (!email || !key) {
-      return badRequest('Email and key are required');
+    if (!email) {
+      return badRequest('Email is required');
     }
 
     // Verify user has active subscription
-    const user = await getUser(email);
+    const user = await getUser(email.toLowerCase());
     if (!user) {
       return notFound('User not found');
     }
@@ -61,22 +78,32 @@ export async function createKey(event: APIGatewayProxyEvent): Promise<APIGateway
       return forbidden('Active subscription required to create API keys');
     }
 
-    // Check key limit (max 3 per user)
-    const existingKeys = await getApiKeysByUser(email);
-    if (existingKeys.length >= 3) {
-      return badRequest('Maximum 3 API keys allowed per account');
+    // Check key limit (1 key per user - simple and prevents sharing)
+    const existingKeys = await getApiKeysByUser(email.toLowerCase());
+    if (existingKeys.length >= 1) {
+      return badRequest('You already have an API key. Delete it first to create a new one.');
     }
 
-    // Hash the key for storage
-    const keyHash = hashKey(key);
+    // Generate key server-side
+    const apiKey = generateApiKey();
+    const keyHash = hashKey(apiKey);
     const keyId = uuidv4();
 
-    await createApiKey(email, keyId, keyHash, name || 'Default Key');
+    await createApiKey(email.toLowerCase(), keyId, keyHash, name || 'My API Key');
+
+    // Email the key to the user
+    try {
+      await sendApiKeyEmail(user.email, apiKey, user.name);
+    } catch (emailError) {
+      console.error('Failed to send API key email:', emailError);
+      // Still return success - key was created
+    }
 
     return success({
       id: keyId,
-      name: name || 'Default Key',
-      message: 'API key created successfully',
+      name: name || 'My API Key',
+      message: 'API key created and sent to your email!',
+      emailSent: true,
     });
   } catch (error: any) {
     console.error('Create key error:', error);
@@ -131,23 +158,46 @@ export async function validateKey(event: APIGatewayProxyEvent): Promise<APIGatew
       return unauthorized('User not found');
     }
 
-    if (user.subscriptionStatus !== 'active' && user.subscriptionStatus !== 'trialing') {
-      return forbidden('Subscription expired or canceled');
+    // Check if user has valid access (subscription or trial)
+    const access = hasValidAccess(user);
+    
+    if (!access.valid) {
+      return {
+        statusCode: 403,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
+        body: JSON.stringify({
+          valid: false,
+          error: access.reason,
+          subscriptionStatus: user.subscriptionStatus,
+          trialEndsAt: user.trialEndsAt,
+          requiresSubscription: true,
+        }),
+      };
     }
 
     // Update last used timestamp
     await updateKeyLastUsed(keyRecord.userId, keyRecord.keyId);
 
+    // Calculate trial info for response
+    const trialDaysRemaining = getTrialDaysRemaining(user.trialEndsAt);
+
     return success({
       valid: true,
       userId: keyRecord.userId,
       subscriptionStatus: user.subscriptionStatus,
+      trialEndsAt: user.trialEndsAt,
+      trialDaysRemaining,
+      currentPeriodEnd: user.currentPeriodEnd,
     });
   } catch (error: any) {
     console.error('Validate key error:', error);
     return serverError(error.message);
   }
 }
+
 
 
 

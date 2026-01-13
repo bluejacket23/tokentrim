@@ -1,175 +1,179 @@
 import * as vscode from 'vscode';
 import { ChatPanelProvider } from './ChatPanelProvider';
 import { ApiClient } from './ApiClient';
-import { LocalOptimizer } from './optimizer/LocalOptimizer';
 
-let chatPanelProvider: ChatPanelProvider;
 let apiClient: ApiClient;
-let localOptimizer: LocalOptimizer;
+let chatPanelProvider: ChatPanelProvider;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log('TokenTrim extension is now active');
+  console.log('TokenTrim extension is now active!');
 
-  // Initialize components
+  // Initialize API client
   apiClient = new ApiClient(context);
-  localOptimizer = new LocalOptimizer();
-  chatPanelProvider = new ChatPanelProvider(context, apiClient, localOptimizer);
 
-  // Register the webview provider
+  // Initialize chat panel provider
+  chatPanelProvider = new ChatPanelProvider(context, apiClient);
+
+  // Register webview provider
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
-      'tokentrim.chatPanel',
+      ChatPanelProvider.viewType,
       chatPanelProvider
     )
   );
 
+  // Register URI handler for OAuth callback
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri: async (uri: vscode.Uri) => {
+        if (uri.path === '/auth/callback') {
+          await handleAuthCallback(uri);
+        }
+      }
+    })
+  );
+
   // Register commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.openPanel', () => {
-      vscode.commands.executeCommand('tokentrim.chatPanel.focus');
+    vscode.commands.registerCommand('tokentrim.login', async () => {
+      await handleLogin();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.setApiKey', async () => {
-      const choice = await vscode.window.showQuickPick(
-        [
-          { label: '🔑 Enter API Key', description: 'Use your TokenTrim subscription API key', value: 'api' },
-          { label: '🧪 Local Mode (Demo)', description: 'Test locally without subscription', value: 'local' },
-        ],
-        { placeHolder: 'Choose how to use TokenTrim' }
-      );
+    vscode.commands.registerCommand('tokentrim.logout', async () => {
+      await handleLogout();
+    })
+  );
 
-      if (!choice) return;
 
-      if (choice.value === 'local') {
-        await context.secrets.store('tokentrim.apiKey', 'tt_local');
-        apiClient.setApiKey('tt_local');
-        vscode.window.showInformationMessage('TokenTrim running in local mode! All optimization happens on your machine.');
-        chatPanelProvider.updateApiKeyStatus(true);
-        return;
-      }
-
-      const apiKey = await vscode.window.showInputBox({
-        prompt: 'Enter your TokenTrim API key',
-        placeHolder: 'tt_xxxxxxxxxxxxxxxxxxxx',
-        password: true,
-        validateInput: (value) => {
-          if (!value) {
-            return 'API key is required';
-          }
-          if (!value.startsWith('tt_')) {
-            return 'Invalid API key format. Should start with "tt_"';
-          }
-          if (value.length < 10) {
-            return 'API key is too short';
-          }
-          return null;
-        },
-      });
-
-      if (apiKey) {
-        await context.secrets.store('tokentrim.apiKey', apiKey);
-        apiClient.setApiKey(apiKey);
-        vscode.window.showInformationMessage('TokenTrim API key saved successfully!');
-        chatPanelProvider.updateApiKeyStatus(true);
-      }
+  context.subscriptions.push(
+    vscode.commands.registerCommand('tokentrim.copyOptimized', () => {
+      chatPanelProvider.copyOptimized();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.clearApiKey', async () => {
-      const confirm = await vscode.window.showWarningMessage(
-        'Are you sure you want to clear your API key?',
-        'Yes',
-        'No'
-      );
-
-      if (confirm === 'Yes') {
-        await context.secrets.delete('tokentrim.apiKey');
-        apiClient.setApiKey('');
-        vscode.window.showInformationMessage('TokenTrim API key cleared.');
-        chatPanelProvider.updateApiKeyStatus(false);
-      }
-    })
-  );
-
-  // Copy optimized prompt to clipboard (Ctrl+Shift+C)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.copyOptimized', async () => {
-      const copied = await chatPanelProvider.copyOptimized();
-      if (!copied) {
-        vscode.window.showWarningMessage('No optimized prompt to copy. Type something in TokenTrim first.');
-      }
+    vscode.commands.registerCommand('tokentrim.clearInput', () => {
+      chatPanelProvider.clearInput();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.optimizeSelection', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        vscode.window.showWarningMessage('No active editor');
-        return;
-      }
+    vscode.commands.registerCommand('tokentrim.subscribe', async () => {
+      const webUrl = vscode.workspace.getConfiguration('tokentrim').get<string>('webUrl') || 'https://tokentrim.com';
+      vscode.env.openExternal(vscode.Uri.parse(`${webUrl}/dashboard`));
+    })
+  );
 
-      const selection = editor.selection;
-      const text = editor.document.getText(selection);
+  // Load existing session on startup
+  initializeSession();
+}
 
-      if (!text) {
-        vscode.window.showWarningMessage('No text selected');
-        return;
-      }
-
-      try {
-        const result = await apiClient.optimize(text);
-        
-        // Show result in a new document
-        const doc = await vscode.workspace.openTextDocument({
-          content: result.optimized,
-          language: 'markdown',
-        });
-        
-        await vscode.window.showTextDocument(doc, {
-          viewColumn: vscode.ViewColumn.Beside,
-          preview: true,
-        });
-
+async function initializeSession() {
+  const session = await apiClient.loadSession();
+  
+  if (session) {
+    // Refresh subscription status in background
+    const status = await apiClient.refreshSubscriptionStatus();
+    
+    if (status.valid) {
+      if (status.status === 'trialing' && status.trialDaysRemaining) {
         vscode.window.showInformationMessage(
-          `Optimized! Saved ${result.savings}% (${result.originalTokens} → ${result.optimizedTokens} tokens)`
+          `TokenTrim: Welcome back! ${status.trialDaysRemaining} days left in your trial.`
         );
-      } catch (error: any) {
-        vscode.window.showErrorMessage(`Optimization failed: ${error.message}`);
       }
-    })
-  );
-
-  // Load API key on startup
-  context.secrets.get('tokentrim.apiKey').then((apiKey) => {
-    if (apiKey) {
-      apiClient.setApiKey(apiKey);
-      chatPanelProvider.updateApiKeyStatus(true);
-    }
-  });
-
-  // Show welcome message on first install
-  const hasShownWelcome = context.globalState.get('tokentrim.hasShownWelcome');
-  if (!hasShownWelcome) {
-    vscode.window
-      .showInformationMessage(
-        'Welcome to TokenTrim! Set your API key to start optimizing prompts.',
-        'Set API Key',
-        'Later'
-      )
-      .then((selection) => {
-        if (selection === 'Set API Key') {
-          vscode.commands.executeCommand('tokentrim.setApiKey');
+    } else {
+      vscode.window.showWarningMessage(
+        status.message || 'TokenTrim: Please subscribe to continue.',
+        'Subscribe'
+      ).then(action => {
+        if (action === 'Subscribe') {
+          vscode.commands.executeCommand('tokentrim.subscribe');
         }
       });
-    context.globalState.update('tokentrim.hasShownWelcome', true);
+    }
+  }
+
+  chatPanelProvider.updateAuthStatus();
+}
+
+async function handleLogin() {
+  try {
+    const loginUrl = apiClient.getLoginUrl();
+    
+    // Open browser to login page
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(loginUrl));
+    
+    if (opened) {
+      vscode.window.showInformationMessage(
+        'TokenTrim: Complete sign-in in your browser, then return here.'
+      );
+    } else {
+      vscode.window.showErrorMessage(
+        'TokenTrim: Could not open browser. Please visit tokentrim.com to sign in.'
+      );
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error.message}`);
   }
 }
 
-export function deactivate() {
-  console.log('TokenTrim extension deactivated');
+async function handleAuthCallback(uri: vscode.Uri) {
+  try {
+    const params = new URLSearchParams(uri.query);
+    const code = params.get('code');
+    const state = params.get('state');
+    const error = params.get('error');
+
+    if (error) {
+      vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error}`);
+      return;
+    }
+
+    if (!code || !state) {
+      vscode.window.showErrorMessage('TokenTrim: Invalid auth callback');
+      return;
+    }
+
+    // Exchange code for session
+    const session = await apiClient.exchangeAuthCode(code, state);
+    
+    // Update UI
+    chatPanelProvider.updateAuthStatus();
+
+    // Show welcome message based on subscription status
+    const status = apiClient.getSubscriptionStatus();
+    
+    if (status.valid) {
+      if (status.status === 'trialing') {
+        vscode.window.showInformationMessage(
+          `Welcome to TokenTrim, ${session.name || session.email}! You have ${status.trialDaysRemaining} days left in your free trial.`
+        );
+      } else {
+        vscode.window.showInformationMessage(
+          `Welcome back, ${session.name || session.email}! TokenTrim is ready.`
+        );
+      }
+    } else {
+      vscode.window.showWarningMessage(
+        'TokenTrim: Your trial has expired. Subscribe to continue optimizing prompts.',
+        'Subscribe'
+      ).then(action => {
+        if (action === 'Subscribe') {
+          vscode.commands.executeCommand('tokentrim.subscribe');
+        }
+      });
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error.message}`);
+  }
 }
 
+async function handleLogout() {
+  await apiClient.logout();
+  chatPanelProvider.updateAuthStatus();
+  vscode.window.showInformationMessage('TokenTrim: Signed out successfully.');
+}
+
+export function deactivate() {}

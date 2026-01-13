@@ -7,10 +7,15 @@ export const metadata: Metadata = {
   description: 'TokenTrim helps developers write more efficient prompts for AI coding assistants. Reduce token costs by up to 60% while getting better results.',
   keywords: ['AI', 'prompt optimization', 'token savings', 'vibe coding', 'LLM', 'developer tools'],
   authors: [{ name: 'TokenTrim' }],
+  icons: {
+    icon: '/favicon.svg',
+    apple: '/icon-512.svg',
+  },
   openGraph: {
     title: 'TokenTrim - Optimize Your AI Prompts',
     description: 'Reduce token costs by up to 60% while getting better AI results.',
     type: 'website',
+    images: ['/icon-512.svg'],
   },
 };
 
@@ -29,6 +34,7 @@ export default function RootLayout({
     </html>
   );
 }
+
 
 
 

@@ -15,6 +15,10 @@ provider:
     JWT_SECRET: ${env:JWT_SECRET, 'your-jwt-secret-change-in-production'}
     STRIPE_SECRET_KEY: ${env:STRIPE_SECRET_KEY, ''}
     STRIPE_WEBHOOK_SECRET: ${env:STRIPE_WEBHOOK_SECRET, ''}
+    STRIPE_PRICE_ID: ${env:STRIPE_PRICE_ID, ''}
+    FRONTEND_URL: ${env:FRONTEND_URL, 'https://tokentrim.com'}
+    FROM_EMAIL: ${env:FROM_EMAIL, 'noreply@tokentrim.com'}
+    SUPPORT_EMAIL: ${env:SUPPORT_EMAIL, 'support@tokentrim.com'}
   
   iam:
     role:
@@ -30,6 +34,11 @@ provider:
           Resource:
             - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}/index/*"
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
 
   httpApi:
     cors:
@@ -86,6 +95,50 @@ functions:
     events:
       - httpApi:
           path: /auth/sync
+          method: post
+
+  authMe:
+    handler: handlers/auth.me
+    events:
+      - httpApi:
+          path: /auth/me
+          method: get
+
+  # Extension Auth Functions
+  exchangeCode:
+    handler: handlers/extension-auth.exchangeCode
+    events:
+      - httpApi:
+          path: /auth/exchange
+          method: post
+
+  checkSubscription:
+    handler: handlers/extension-auth.checkSubscription
+    events:
+      - httpApi:
+          path: /subscription/status
+          method: get
+
+  # Subscription Functions
+  createCheckoutSession:
+    handler: handlers/subscription.createCheckoutSession
+    events:
+      - httpApi:
+          path: /subscription/checkout
+          method: post
+
+  createPortalSession:
+    handler: handlers/subscription.createPortalSession
+    events:
+      - httpApi:
+          path: /subscription/portal
+          method: post
+
+  stripeWebhook:
+    handler: handlers/subscription.webhook
+    events:
+      - httpApi:
+          path: /subscription/webhook
           method: post
 
   # User Functions
@@ -189,6 +242,7 @@ resources:
         TimeToLiveSpecification:
           AttributeName: ttl
           Enabled: true
+
 
 
 

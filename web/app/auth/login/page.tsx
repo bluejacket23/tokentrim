@@ -163,10 +163,10 @@ export default function LoginPage() {
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     placeholder="Your name"
-                    className="input pl-10"
+                    className="input-with-icon"
                     required={!isLogin}
                   />
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
                 </div>
               </div>
             )}
@@ -179,10 +179,10 @@ export default function LoginPage() {
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   placeholder="you@example.com"
-                  className="input pl-10"
+                  className="input-with-icon"
                   required
                 />
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
               </div>
             </div>
 
@@ -194,11 +194,11 @@ export default function LoginPage() {
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   placeholder="••••••••"
-                  className="input pl-10"
+                  className="input-with-icon"
                   required
                   minLength={8}
                 />
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-ink-500" />
               </div>
             </div>
 
@@ -241,6 +241,7 @@ export default function LoginPage() {
     </div>
   );
 }
+
 
 
 
