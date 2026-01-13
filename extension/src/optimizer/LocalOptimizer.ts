@@ -117,10 +117,30 @@ export class LocalOptimizer {
       /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+(INFO|WARN|ERROR|DEBUG)/,  // Structured Go logs (Zap/Zerolog)
       /gorm:/i,  // GORM logs
       /CrashLoopBackOff/,  // Kubernetes
+      // TypeScript patterns
+      /error TS\d{4,5}:/,  // TypeScript error codes
+      /\.tsx?:\d+:\d+\s+-\s+error/,  // TS file:line:col - error
+      /tsc.*build/i,  // tsc build command
+      /Type '.*' is not assignable to type/,  // Common TS error
+      /Property '.*' does not exist on type/,  // Common TS error
     ];
     
     const matchCount = indicators.filter(p => p.test(text)).length;
     return matchCount >= 2;
+  }
+
+  /**
+   * Check if this is primarily TypeScript compilation errors
+   */
+  private isTypeScriptError(text: string): boolean {
+    const tsIndicators = [
+      /error TS\d{4,5}:/,
+      /\.tsx?:\d+:\d+\s+-\s+error/,
+      /tsc\s/,
+      /Type '.*' is not assignable/,
+      /Property '.*' does not exist on type/,
+    ];
+    return tsIndicators.filter(p => p.test(text)).length >= 2;
   }
 
   private detectIntent(text: string): string {
@@ -158,10 +178,162 @@ export class LocalOptimizer {
   }
 
   /**
+   * Optimize TypeScript compilation errors
+   */
+  private optimizeTypeScriptErrors(input: string): string {
+    const lines = input.split('\n');
+    
+    // Group errors by error code
+    const errorsByCode: Map<string, Array<{file: string, line: string, col: string, message: string, context?: string}>> = new Map();
+    const configErrors: string[] = [];
+    const nodeModulesErrors: string[] = [];
+    
+    // Noise patterns to skip entirely
+    const skipPatterns = [
+      /^>\s*(tsc|npm|yarn|vite)/,  // Build commands
+      /^$/,  // Empty lines
+      /^-+$/,  // Dividers
+      /^\s*~+\s*$/,  // Error underlines
+      /^(Repeated CI output|Build failed|TS Build Summary|Found \d+ errors)/i,
+      /^Error: Process completed with exit code/,
+      /^Some errors have detailed explanations/,
+      /^For more information, visit/,
+      /Types of property '.*' are incompatible/,  // Sub-explanation, main error is enough
+      /Type '.*' is not assignable to type '.*'/,  // When it's a sub-line (indented)
+    ];
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      
+      // Skip noise
+      if (skipPatterns.some(p => p.test(line.trim()))) {
+        i++;
+        continue;
+      }
+      
+      // Match TypeScript error: file:line:col - error TSxxxx: message
+      const tsErrorMatch = line.match(/^(.+\.tsx?):(\d+):(\d+)\s+-\s+error\s+(TS\d+):\s*(.+)/);
+      if (tsErrorMatch) {
+        const [, file, lineNum, col, code, message] = tsErrorMatch;
+        
+        // Check if it's a node_modules error
+        const isNodeModules = file.includes('node_modules');
+        
+        // Get code context (the next line if it shows the code)
+        let context: string | undefined;
+        if (i + 2 < lines.length) {
+          const codeLine = lines[i + 1];
+          const pointerLine = lines[i + 2];
+          // If next line looks like code context (number followed by code)
+          if (/^\d+\s+/.test(codeLine)) {
+            context = codeLine.trim();
+            i += 2; // Skip the code and pointer lines
+          }
+        }
+        
+        const errorInfo = { file, line: lineNum, col, message: message.trim(), context };
+        
+        if (isNodeModules) {
+          // Simplify node_modules errors
+          const shortFile = file.replace(/.*node_modules\//, '');
+          nodeModulesErrors.push(`${code}: ${shortFile} - ${message.trim()}`);
+        } else {
+          if (!errorsByCode.has(code)) {
+            errorsByCode.set(code, []);
+          }
+          errorsByCode.get(code)!.push(errorInfo);
+        }
+        i++;
+        continue;
+      }
+      
+      // Match config errors: error TSxxxx: message (no file)
+      const configErrorMatch = line.match(/^error\s+(TS\d+):\s*(.+)/);
+      if (configErrorMatch) {
+        const [, code, message] = configErrorMatch;
+        configErrors.push(`${code}: ${message.trim()}`);
+        i++;
+        continue;
+      }
+      
+      // Match tsconfig errors
+      const tsconfigMatch = line.match(/^tsconfig\.json:\d+:\d+\s+-\s+error\s+(TS\d+):\s*(.+)/);
+      if (tsconfigMatch) {
+        const [, code, message] = tsconfigMatch;
+        configErrors.push(`tsconfig ${code}: ${message.trim()}`);
+        i++;
+        continue;
+      }
+      
+      i++;
+    }
+    
+    // Build optimized output
+    const sections: string[] = ['Fix TypeScript errors:'];
+    
+    // Group and deduplicate src errors by code
+    for (const [code, errors] of errorsByCode) {
+      if (errors.length === 1) {
+        // Single error - show full detail
+        const e = errors[0];
+        const shortFile = e.file.replace(/.*\/src\//, 'src/');
+        sections.push(`${code} ${shortFile}:${e.line} - ${e.message}`);
+        if (e.context) {
+          sections.push(`  ${e.context}`);
+        }
+      } else {
+        // Multiple errors with same code - group them
+        const shortMessage = errors[0].message.replace(/'[^']+'/g, "'...'").slice(0, 60);
+        sections.push(`${code} (${errors.length}x): ${shortMessage}`);
+        // Show first 3 locations
+        for (const e of errors.slice(0, 3)) {
+          const shortFile = e.file.replace(/.*\/src\//, 'src/');
+          sections.push(`  → ${shortFile}:${e.line}`);
+        }
+        if (errors.length > 3) {
+          sections.push(`  → ...and ${errors.length - 3} more`);
+        }
+      }
+    }
+    
+    // Add config errors
+    if (configErrors.length > 0) {
+      sections.push('');
+      sections.push('Config issues:');
+      // Deduplicate
+      const uniqueConfig = [...new Set(configErrors)];
+      for (const err of uniqueConfig.slice(0, 5)) {
+        sections.push(`  ${err}`);
+      }
+    }
+    
+    // Summarize node_modules errors (usually less actionable)
+    if (nodeModulesErrors.length > 0) {
+      sections.push('');
+      const uniqueNM = [...new Set(nodeModulesErrors)];
+      if (uniqueNM.length <= 2) {
+        sections.push('Dependency issues:');
+        for (const err of uniqueNM) {
+          sections.push(`  ${err}`);
+        }
+      } else {
+        sections.push(`Dependency issues: ${uniqueNM.length} errors in node_modules (may need @types packages)`);
+      }
+    }
+    
+    return sections.join('\n');
+  }
+
+  /**
    * Optimize error logs - deduplicate, keep essential info
-   * Handles: Node/JS errors, Java/Spring Boot exceptions, webpack errors
+   * Handles: Node/JS errors, Java/Spring Boot exceptions, webpack errors, TypeScript errors
    */
   private optimizeErrorLog(input: string): string {
+    // Check for TypeScript-specific errors first
+    if (this.isTypeScriptError(input)) {
+      return this.optimizeTypeScriptErrors(input);
+    }
     const lines = input.split('\n');
     const sections: string[] = [];
     
