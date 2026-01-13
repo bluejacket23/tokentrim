@@ -57,6 +57,13 @@ export class LocalOptimizer {
       optimized = original;
     }
 
+    // Add output optimization directive (always, except for explain intent)
+    // Even if input wasn't reduced, the directive saves output tokens
+    const directive = this.getOutputDirective(intent);
+    if (directive) {
+      optimized = optimized.trimEnd() + '\n\n' + directive;
+    }
+
     const optimizedTokens = this.estimateTokens(optimized);
     const savings = original === optimized ? 0 : Math.max(0, Math.round((1 - optimizedTokens / originalTokens) * 100));
     const estimatedOutputSavings = savings >= 50 ? Math.round(savings * 0.5) : Math.round(savings * 0.3);
@@ -117,11 +124,37 @@ export class LocalOptimizer {
   }
 
   private detectIntent(text: string): string {
-    const lower = text.toLowerCase();
-    if (/\b(error|exception|bug|fix|crash|undefined|null|typeerror)\b/.test(lower)) return 'debug';
-    if (/\b(explain|what is|how does|why does)\b/.test(lower)) return 'explain';
-    if (/\b(create|build|implement|write|generate|make|add)\b/.test(lower)) return 'create';
+    // Remove code blocks before intent detection to avoid matching keywords in code
+    const textWithoutCode = text
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`[^`]+`/g, '')
+      .toLowerCase();
+    
+    // Order matters - more specific intents first
+    if (/\b(convert|migrate|transform|change from|switch to|port to)\b/.test(textWithoutCode)) return 'convert';
+    if (/\b(refactor|improve|optimize|clean up|simplify)\b/.test(textWithoutCode)) return 'refactor';
+    if (/\b(review|check|audit|find issues|look at)\b/.test(textWithoutCode)) return 'review';
+    if (/\b(error|exception|bug|fix|crash|undefined|null|typeerror)\b/.test(textWithoutCode)) return 'debug';
+    if (/\b(explain|what is|how does|why does|understand|learn)\b/.test(textWithoutCode)) return 'explain';
+    if (/\b(create|build|implement|write|generate|make|add)\b/.test(textWithoutCode)) return 'create';
     return 'general';
+  }
+
+  /**
+   * Get output optimization directive based on intent
+   * These short instructions help LLMs produce more concise responses
+   */
+  private getOutputDirective(intent: string): string {
+    const directives: Record<string, string> = {
+      debug: '→ Fix only, no explanations',
+      create: '→ Code only',
+      refactor: '→ Refactored code only',
+      convert: '→ Converted code only',
+      review: '→ Issues only, be brief',
+      general: '→ Be concise',
+      // 'explain' intentionally omitted - user wants detail
+    };
+    return directives[intent] || '';
   }
 
   /**

@@ -211,6 +211,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       justify-content: space-between;
     }
 
+    .output-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
     .token-count {
       font-family: monospace;
       color: var(--trim-green);
@@ -430,8 +440,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   <div class="output-section">
     <div class="output-header">
-      <div class="input-label">
-        <span>Optimized </span>
+      <div class="output-label">
+        <span>Optimized</span>
         <span class="token-count" id="outputTokens">~0 tokens</span>
       </div>
       <div class="savings-row">

@@ -9,7 +9,6 @@ export async function getUser_(event: APIGatewayProxyEvent): Promise<APIGatewayP
     if (!email) {
       return badRequest('Email is required');
     }
-
     const user = await getUser(email);
 
     if (!user) {
@@ -82,6 +81,16 @@ export async function updateSubscription(
     return serverError(error.message);
   }
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
