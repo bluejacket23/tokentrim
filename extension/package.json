@@ -2,7 +2,7 @@
   "name": "tokentrim",
   "displayName": "TokenTrim - AI Prompt Optimizer",
   "description": "Optimize your AI prompts in real-time. Reduce token costs and get better LLM responses.",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "publisher": "tokentrim",
   "repository": {
     "type": "git",
@@ -38,16 +38,16 @@
         "icon": "$(scissors)"
       },
       {
-        "command": "tokentrim.login",
-        "title": "TokenTrim: Sign In"
+        "command": "tokentrim.setLicenseKey",
+        "title": "TokenTrim: Enter License Key"
       },
       {
-        "command": "tokentrim.logout",
-        "title": "TokenTrim: Sign Out"
+        "command": "tokentrim.clearLicenseKey",
+        "title": "TokenTrim: Remove License Key"
       },
       {
         "command": "tokentrim.subscribe",
-        "title": "TokenTrim: Subscribe"
+        "title": "TokenTrim: Get License Key"
       },
       {
         "command": "tokentrim.optimizeSelection",
@@ -110,7 +110,7 @@
       "properties": {
         "tokentrim.apiUrl": {
           "type": "string",
-          "default": "https://api.tokentrim.com",
+          "default": "https://dxtbchard5.execute-api.us-east-1.amazonaws.com",
           "description": "TokenTrim API URL"
         },
         "tokentrim.webUrl": {

@@ -70,6 +70,14 @@ export function serverError(message: string = 'Internal server error'): APIGatew
   };
 }
 
+export function error(message: string, statusCode: number = 400): APIGatewayProxyResult {
+  return {
+    statusCode,
+    headers,
+    body: JSON.stringify({ message, error: message }),
+  };
+}
+
 
 
 

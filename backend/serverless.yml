@@ -8,7 +8,7 @@ provider:
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-east-1'}
   memorySize: 256
-  timeout: 30
+  timeout: 29
   
   environment:
     DYNAMODB_TABLE: ${self:service}-${self:provider.stage}
@@ -45,7 +45,8 @@ provider:
       allowedOrigins:
         - http://localhost:3000
         - https://tokentrim.com
-        - https://*.tokentrim.com
+        - https://www.tokentrim.com
+        - https://app.tokentrim.com
       allowedHeaders:
         - Content-Type
         - Authorization
@@ -63,6 +64,9 @@ plugins:
   - serverless-offline
 
 custom:
+  serverless-offline:
+    httpPort: 4000
+    lambdaPort: 4002
   esbuild:
     bundle: true
     minify: false
@@ -104,20 +108,13 @@ functions:
           path: /auth/me
           method: get
 
-  # Extension Auth Functions
-  exchangeCode:
-    handler: handlers/extension-auth.exchangeCode
+  # License Key Validation (for extension)
+  validateLicense:
+    handler: handlers/license.validate
     events:
       - httpApi:
-          path: /auth/exchange
+          path: /license/validate
           method: post
-
-  checkSubscription:
-    handler: handlers/extension-auth.checkSubscription
-    events:
-      - httpApi:
-          path: /subscription/status
-          method: get
 
   # Subscription Functions
   createCheckoutSession:
@@ -154,35 +151,6 @@ functions:
     events:
       - httpApi:
           path: /users/subscription
-          method: post
-
-  # API Key Functions
-  getKeys:
-    handler: handlers/keys.getKeys
-    events:
-      - httpApi:
-          path: /keys
-          method: get
-
-  createKey:
-    handler: handlers/keys.createKey
-    events:
-      - httpApi:
-          path: /keys
-          method: post
-
-  deleteKey:
-    handler: handlers/keys.deleteKey
-    events:
-      - httpApi:
-          path: /keys
-          method: delete
-
-  validateKey:
-    handler: handlers/keys.validateKey
-    events:
-      - httpApi:
-          path: /keys/validate
           method: post
 
   # Optimization Functions

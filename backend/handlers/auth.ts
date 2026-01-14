@@ -24,6 +24,7 @@ function formatUserResponse(user: User) {
     email: user.email,
     name: user.name,
     image: user.image,
+    licenseKey: user.licenseKey,
     subscriptionStatus: user.subscriptionStatus,
     trialEndsAt: user.trialEndsAt,
     trialDaysRemaining: getTrialDaysRemaining(user),
@@ -142,12 +143,15 @@ export async function sync(event: APIGatewayProxyEvent): Promise<APIGatewayProxy
 
     if (user) {
       // Update existing user with latest OAuth info
-      user = await updateUser(normalizedEmail, {
+      const updates: any = {
         name: name || user.name,
         image: image || user.image,
         provider: provider || user.provider,
         providerId: providerId || user.providerId,
-      });
+      };
+      
+      // License key is only generated when user subscribes via Stripe
+      user = await updateUser(normalizedEmail, updates);
     } else {
       // Create new user from OAuth - gets 7-day trial automatically
       user = await createUser({

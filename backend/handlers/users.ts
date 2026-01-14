@@ -20,7 +20,9 @@ export async function getUser_(event: APIGatewayProxyEvent): Promise<APIGatewayP
       email: user.email,
       name: user.name,
       image: user.image,
+      licenseKey: user.licenseKey,
       subscriptionStatus: user.subscriptionStatus,
+      trialEndsAt: user.trialEndsAt,
       customerId: user.customerId,
     });
   } catch (error: any) {

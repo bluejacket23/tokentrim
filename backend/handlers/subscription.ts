@@ -55,6 +55,9 @@ export async function createCheckoutSession(event: APIGatewayProxyEvent): Promis
       } as any);
     }
 
+    // Check if user has ever had a subscription (used trial)
+    const hasUsedTrial = user.subscriptionStatus !== 'none' && user.trialEndsAt;
+
     // Create checkout session
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -66,8 +69,8 @@ export async function createCheckoutSession(event: APIGatewayProxyEvent): Promis
           quantity: 1,
         },
       ],
-      // 7-day free trial if user hasn't used trial yet
-      subscription_data: user.subscriptionStatus === 'trialing' ? undefined : {
+      // 7-day free trial for first-time subscribers only
+      subscription_data: hasUsedTrial ? undefined : {
         trial_period_days: 7,
       },
       success_url: `${FRONTEND_URL}/dashboard?session_id={CHECKOUT_SESSION_ID}&success=true`,
@@ -235,6 +238,20 @@ export async function webhook(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   }
 }
 
+// Generate a unique license key like TT-XXXX-XXXX-XXXX
+function generateLicenseKey(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoid confusing chars
+  const segments: string[] = [];
+  for (let s = 0; s < 3; s++) {
+    let segment = '';
+    for (let i = 0; i < 4; i++) {
+      segment += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    segments.push(segment);
+  }
+  return `TT-${segments.join('-')}`;
+}
+
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const userId = session.metadata?.userId;
   const customerId = session.customer as string;
@@ -250,30 +267,54 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // Get subscription details
   const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
-  await updateUser(userId, {
+  // Get current user to check if they already have a license key
+  const currentUser = await getUser(userId);
+  const licenseKey = currentUser?.licenseKey || generateLicenseKey();
+
+  // Update user with subscription and license key
+  const updates: any = {
     customerId,
     subscriptionId,
     subscriptionStatus: subscription.status === 'trialing' ? 'trialing' : 'active',
     currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString(),
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    GSI1PK: 'CUSTOMER',
-    GSI1SK: customerId,
-  } as any);
+  };
+
+  // Only set license key GSI if we're creating a new license
+  if (!currentUser?.licenseKey) {
+    updates.licenseKey = licenseKey;
+    updates.GSI1PK = 'LICENSE';
+    updates.GSI1SK = licenseKey;
+  } else {
+    // Keep customer GSI for existing users
+    updates.GSI1PK = 'CUSTOMER';
+    updates.GSI1SK = customerId;
+  }
+
+  // Set trial end if trialing
+  if (subscription.trial_end) {
+    updates.trialEndsAt = new Date(subscription.trial_end * 1000).toISOString();
+  }
+
+  await updateUser(userId, updates);
+  
+  console.log(`User ${userId} now has license key: ${licenseKey}`);
 }
 
 async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string;
   
-  // Get user by customer ID
+  // Get user by customer email (most reliable)
   const customer = await stripe.customers.retrieve(customerId);
   if (customer.deleted) return;
   
-  const userId = customer.metadata?.userId || (customer as Stripe.Customer).email;
-  if (!userId) {
-    console.error('Cannot find user for customer:', customerId);
+  const customerEmail = (customer as Stripe.Customer).email;
+  if (!customerEmail) {
+    console.error('Cannot find email for customer:', customerId);
     return;
   }
-
+  
+  const userId = customerEmail.toLowerCase();
   console.log(`Subscription updated for user ${userId}: ${subscription.status}`);
 
   // Map Stripe status to our status
@@ -294,16 +335,19 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
       break;
   }
 
-  await updateUser(userId, {
+  const updates: any = {
     subscriptionId: subscription.id,
     subscriptionStatus: status,
     currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString(),
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    // If trialing on Stripe, update trial end
-    ...(subscription.trial_end && {
-      trialEndsAt: new Date(subscription.trial_end * 1000).toISOString(),
-    }),
-  });
+  };
+
+  // Safely add trial end date if it exists and is valid
+  if (subscription.trial_end && subscription.trial_end > 0) {
+    updates.trialEndsAt = new Date(subscription.trial_end * 1000).toISOString();
+  }
+
+  await updateUser(userId, updates);
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
@@ -312,9 +356,10 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   const customer = await stripe.customers.retrieve(customerId);
   if (customer.deleted) return;
   
-  const userId = customer.metadata?.userId || (customer as Stripe.Customer).email;
-  if (!userId) return;
-
+  const customerEmail = (customer as Stripe.Customer).email;
+  if (!customerEmail) return;
+  
+  const userId = customerEmail.toLowerCase();
   console.log(`Subscription deleted for user ${userId}`);
 
   await updateUser(userId, {
@@ -330,9 +375,10 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   const customer = await stripe.customers.retrieve(customerId);
   if (customer.deleted) return;
   
-  const userId = customer.metadata?.userId || (customer as Stripe.Customer).email;
-  if (!userId) return;
-
+  const customerEmail = (customer as Stripe.Customer).email;
+  if (!customerEmail) return;
+  
+  const userId = customerEmail.toLowerCase();
   console.log(`Payment succeeded for user ${userId}`);
 
   // Payment succeeded - ensure subscription is active
@@ -351,9 +397,10 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   const customer = await stripe.customers.retrieve(customerId);
   if (customer.deleted) return;
   
-  const userId = customer.metadata?.userId || (customer as Stripe.Customer).email;
-  if (!userId) return;
-
+  const customerEmail = (customer as Stripe.Customer).email;
+  if (!customerEmail) return;
+  
+  const userId = customerEmail.toLowerCase();
   console.log(`Payment failed for user ${userId}`);
 
   // Mark as past_due - Stripe will retry

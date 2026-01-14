@@ -16,7 +16,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.localOptimizer = new LocalOptimizer();
   }
 
-  // Copy the last optimized result to clipboard
   public async copyOptimized(): Promise<boolean> {
     if (this._lastOptimizedText) {
       await vscode.env.clipboard.writeText(this._lastOptimizedText);
@@ -27,28 +26,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return false;
   }
 
-  // Clear input
   public clearInput(): void {
     this._view?.webview.postMessage({ type: 'clearInput' });
   }
 
-  // Update auth status in UI
-  public updateAuthStatus(): void {
+  public updateLicenseStatus(): void {
     if (!this._view) return;
 
-    const isLoggedIn = this.apiClient.isLoggedIn();
-    const session = this.apiClient.getSession();
-    const status = this.apiClient.getSubscriptionStatus();
+    const hasKey = this.apiClient.hasLicenseKey();
+    const info = this.apiClient.getLicenseInfo();
 
     this._view.webview.postMessage({
-      type: 'authStatus',
-      isLoggedIn,
-      email: session?.email,
-      name: session?.name,
-      subscriptionStatus: status.status,
-      subscriptionValid: status.valid,
-      trialDaysRemaining: status.trialDaysRemaining,
-      message: status.message,
+      type: 'licenseStatus',
+      hasKey,
+      valid: info?.valid || false,
+      email: info?.email,
+      name: info?.name,
+      subscriptionStatus: info?.subscriptionStatus,
+      trialDaysRemaining: info?.trialDaysRemaining,
+      message: info?.message,
     });
   }
 
@@ -66,16 +62,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    // Handle messages from the webview
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.type) {
         case 'optimize': {
-          // Check if user can optimize - subscription required
-          const status = this.apiClient.getSubscriptionStatus();
-          if (!status.valid) {
+          const info = this.apiClient.getLicenseInfo();
+          if (!info?.valid) {
             this._view?.webview.postMessage({
               type: 'blocked',
-              message: status.message || 'Please sign in or subscribe to use TokenTrim.',
+              message: info?.message || 'Please enter a valid license key.',
             });
             return;
           }
@@ -98,17 +92,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
         case 'copy': {
           await vscode.env.clipboard.writeText(data.text);
-          vscode.window.showInformationMessage('Optimized prompt copied to clipboard!');
+          vscode.window.showInformationMessage('Optimized prompt copied!');
           break;
         }
 
-        case 'login': {
-          vscode.commands.executeCommand('tokentrim.login');
+        case 'setLicenseKey': {
+          vscode.commands.executeCommand('tokentrim.setLicenseKey');
           break;
         }
 
-        case 'logout': {
-          vscode.commands.executeCommand('tokentrim.logout');
+        case 'submitLicenseKey': {
+          const result = await this.apiClient.validateLicenseKey(data.key);
+          if (result.valid) {
+            this.updateLicenseStatus();
+            vscode.window.showInformationMessage('License key activated!');
+          } else {
+            this._view?.webview.postMessage({
+              type: 'licenseError',
+              message: result.message || 'Invalid license key',
+            });
+          }
+          break;
+        }
+
+        case 'clearLicenseKey': {
+          vscode.commands.executeCommand('tokentrim.clearLicenseKey');
           break;
         }
 
@@ -116,12 +124,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand('tokentrim.subscribe');
           break;
         }
-
       }
     });
 
-    // Send initial auth status
-    this.updateAuthStatus();
+    this.updateLicenseStatus();
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
@@ -185,81 +191,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
     }
 
-    .auth-status {
+    .status-badge {
       font-size: 11px;
       padding: 4px 8px;
       border-radius: 12px;
-      cursor: pointer;
-      transition: all 0.2s;
     }
 
-    .auth-status.signed-in {
+    .status-badge.active {
       background: rgba(34, 197, 94, 0.2);
       color: var(--trim-green);
     }
 
-    .auth-status.signed-out {
-      background: rgba(59, 130, 246, 0.2);
-      color: #3b82f6;
-    }
-
-    .auth-status.signed-out:hover {
-      background: rgba(59, 130, 246, 0.3);
-    }
-
-    .auth-status.local {
-      background: rgba(168, 85, 247, 0.2);
-      color: #a855f7;
-    }
-
-    /* Warning banner */
-    .warning-banner {
-      background: rgba(234, 179, 8, 0.15);
-      border: 1px solid rgba(234, 179, 8, 0.3);
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 12px;
-      font-size: 12px;
-    }
-
-    .warning-banner.error {
-      background: rgba(239, 68, 68, 0.15);
-      border-color: rgba(239, 68, 68, 0.3);
-    }
-
-    .warning-banner .title {
-      font-weight: 600;
-      margin-bottom: 4px;
-      color: #eab308;
-    }
-
-    .warning-banner.error .title {
+    .status-badge.inactive {
+      background: rgba(239, 68, 68, 0.2);
       color: #ef4444;
     }
 
-    .warning-banner .message {
-      color: var(--text-secondary);
-      margin-bottom: 8px;
-    }
-
-    .warning-banner button {
-      background: #eab308;
-      color: #000;
-      padding: 6px 12px;
-      border: none;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    .warning-banner.error button {
-      background: #ef4444;
-      color: #fff;
-    }
-
-    /* Login prompt */
-    .login-prompt {
+    /* License Key Prompt */
+    .license-prompt {
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -270,19 +219,55 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       gap: 16px;
     }
 
-    .login-prompt h3 {
+    .license-prompt h3 {
       font-size: 16px;
       margin-bottom: 4px;
     }
 
-    .login-prompt p {
+    .license-prompt p {
       color: var(--text-secondary);
       font-size: 12px;
-      max-width: 250px;
+      max-width: 280px;
       line-height: 1.5;
     }
 
-    .login-prompt .btn-login {
+    .license-input-group {
+      width: 100%;
+      max-width: 280px;
+    }
+
+    .license-input {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: monospace;
+      font-size: 13px;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+
+    .license-input:focus {
+      outline: none;
+      border-color: var(--trim-green);
+    }
+
+    .license-input::placeholder {
+      letter-spacing: normal;
+      font-family: var(--vscode-font-family);
+    }
+
+    .license-error {
+      color: #ef4444;
+      font-size: 11px;
+      margin-top: 8px;
+    }
+
+    .btn-activate {
+      width: 100%;
+      max-width: 280px;
       background: var(--trim-green);
       color: #000;
       padding: 10px 24px;
@@ -294,18 +279,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       margin-top: 8px;
     }
 
-    .login-prompt .btn-login:hover {
+    .btn-activate:hover {
       background: var(--trim-green-dark);
     }
 
-    .login-prompt .link {
-      font-size: 11px;
-      color: var(--text-secondary);
-      cursor: pointer;
+    .btn-activate:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
-    .login-prompt .link:hover {
-      color: #a855f7;
+    .license-prompt .link {
+      font-size: 11px;
+      color: var(--trim-green);
+      cursor: pointer;
+      text-decoration: underline;
+      margin-top: 8px;
+    }
+
+    .license-prompt .link:hover {
+      color: var(--trim-green-dark);
     }
 
     /* Main content */
@@ -481,21 +473,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div class="logo-icon">✂</div>
       <span>TokenTrim</span>
     </div>
-    <div id="authStatus" class="auth-status signed-out" onclick="handleAuthClick()">
-      Sign In
+    <div id="statusBadge" class="status-badge inactive">
+      No License
     </div>
   </div>
 
-  <div id="warningBanner" class="warning-banner" style="display: none;">
-    <div class="title" id="warningTitle"></div>
-    <div class="message" id="warningMessage"></div>
-    <button onclick="handleWarningAction()" id="warningButton">Subscribe</button>
-  </div>
-
-  <div id="loginPrompt" class="login-prompt">
+  <div id="licensePrompt" class="license-prompt">
     <h3>Welcome to TokenTrim ✂️</h3>
-    <p>Optimize your prompts to save tokens and get better AI responses.</p>
-    <button class="btn-login" onclick="handleLogin()">Sign In to Get Started</button>
+    <p>Enter your license key to start optimizing prompts and saving tokens.</p>
+    
+    <div class="license-input-group">
+      <input 
+        type="text" 
+        id="licenseInput" 
+        class="license-input" 
+        placeholder="TT-XXXX-XXXX-XXXX"
+        maxlength="17"
+      />
+      <div id="licenseError" class="license-error" style="display: none;"></div>
+    </div>
+    
+    <button id="activateBtn" class="btn-activate" disabled>Activate</button>
+    
+    <span class="link" onclick="handleGetLicense()">Get a license key →</span>
   </div>
 
   <div id="mainContent" class="main-content" style="display: none;">
@@ -523,7 +523,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <div class="output-container" id="outputText" tabindex="0">
         <span class="placeholder">Optimized prompt will appear here...</span>
       </div>
-      <div class="copy-hint">Click to select • Ctrl+Shift+C copy • Ctrl+Shift+X clear</div>
+      <div class="copy-hint">Click to select • Ctrl+Shift+C copy</div>
       <div class="actions">
         <button class="btn-secondary" onclick="clearInput()">✕ Clear</button>
         <button class="btn-primary" onclick="copyToClipboard()">📋 Copy</button>
@@ -534,15 +534,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <script>
     const vscode = acquireVsCodeApi();
     
-    let isLoggedIn = false;
-    let subscriptionValid = false;
+    let isLicensed = false;
     let currentResult = null;
     let optimizeTimeout = null;
 
-    const authStatus = document.getElementById('authStatus');
-    const loginPrompt = document.getElementById('loginPrompt');
+    const statusBadge = document.getElementById('statusBadge');
+    const licensePrompt = document.getElementById('licensePrompt');
     const mainContent = document.getElementById('mainContent');
-    const warningBanner = document.getElementById('warningBanner');
+    const licenseInput = document.getElementById('licenseInput');
+    const licenseError = document.getElementById('licenseError');
+    const activateBtn = document.getElementById('activateBtn');
     const inputText = document.getElementById('inputText');
     const outputText = document.getElementById('outputText');
     const inputTokens = document.getElementById('inputTokens');
@@ -556,17 +557,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function updateUI() {
-      // Only show main content if logged in AND has valid subscription
-      if (isLoggedIn && subscriptionValid) {
-        loginPrompt.style.display = 'none';
+      if (isLicensed) {
+        licensePrompt.style.display = 'none';
         mainContent.style.display = 'flex';
       } else {
-        loginPrompt.style.display = 'flex';
+        licensePrompt.style.display = 'flex';
         mainContent.style.display = 'none';
       }
     }
 
-    // Input handling
+    // License input handling
+    licenseInput.addEventListener('input', () => {
+      let value = licenseInput.value.toUpperCase();
+      // Auto-format: TT-XXXX-XXXX-XXXX
+      value = value.replace(/[^A-Z0-9-]/g, '');
+      licenseInput.value = value;
+      
+      const isValid = value.match(/^TT-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+      activateBtn.disabled = !isValid;
+      licenseError.style.display = 'none';
+    });
+
+    activateBtn.addEventListener('click', () => {
+      const key = licenseInput.value.trim();
+      if (key) {
+        activateBtn.disabled = true;
+        activateBtn.textContent = 'Validating...';
+        vscode.postMessage({ type: 'submitLicenseKey', key });
+      }
+    });
+
+    licenseInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !activateBtn.disabled) {
+        activateBtn.click();
+      }
+    });
+
+    // Prompt input handling
     inputText.addEventListener('input', () => {
       const tokens = estimateTokens(inputText.value);
       inputTokens.textContent = '~' + tokens + ' tokens';
@@ -584,9 +611,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    inputText.addEventListener('click', () => inputText.select());
-
-    // Output handling
     outputText.addEventListener('click', () => {
       if (currentResult) {
         const selection = window.getSelection();
@@ -602,43 +626,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const msg = event.data;
 
       switch (msg.type) {
-        case 'authStatus':
-          isLoggedIn = msg.isLoggedIn;
-          subscriptionValid = msg.subscriptionValid || false;
+        case 'licenseStatus':
+          isLicensed = msg.valid;
           
-          if (msg.isLoggedIn) {
+          if (msg.valid) {
             if (msg.subscriptionStatus === 'trialing' && msg.trialDaysRemaining) {
-              authStatus.textContent = '✓ Trial (' + msg.trialDaysRemaining + 'd)';
-            } else if (msg.subscriptionStatus === 'active') {
-              authStatus.textContent = '✓ Pro';
+              statusBadge.textContent = '✓ Trial (' + msg.trialDaysRemaining + 'd)';
             } else {
-              authStatus.textContent = '⚠️ ' + (msg.email || 'Signed In');
+              statusBadge.textContent = '✓ Pro';
             }
-            authStatus.className = 'auth-status signed-in';
-            
-            // Show warning if needed
-            if (!msg.subscriptionValid) {
-              warningBanner.style.display = 'block';
-              warningBanner.className = 'warning-banner error';
-              document.getElementById('warningTitle').textContent = '🚫 Subscription Required';
-              document.getElementById('warningMessage').textContent = msg.message || 'Please subscribe to continue.';
-              document.getElementById('warningButton').textContent = 'Subscribe Now';
-            } else if (msg.trialDaysRemaining && msg.trialDaysRemaining <= 2) {
-              warningBanner.style.display = 'block';
-              warningBanner.className = 'warning-banner';
-              document.getElementById('warningTitle').textContent = '⚠️ Trial Ending Soon';
-              document.getElementById('warningMessage').textContent = 'Your trial ends in ' + msg.trialDaysRemaining + ' day(s).';
-              document.getElementById('warningButton').textContent = 'Subscribe Now';
-            } else {
-              warningBanner.style.display = 'none';
-            }
+            statusBadge.className = 'status-badge active';
           } else {
-            authStatus.textContent = 'Sign In';
-            authStatus.className = 'auth-status signed-out';
-            warningBanner.style.display = 'none';
+            statusBadge.textContent = 'No License';
+            statusBadge.className = 'status-badge inactive';
           }
           
           updateUI();
+          
+          // Reset activate button
+          activateBtn.disabled = false;
+          activateBtn.textContent = 'Activate';
+          break;
+
+        case 'licenseError':
+          licenseError.textContent = msg.message;
+          licenseError.style.display = 'block';
+          activateBtn.disabled = false;
+          activateBtn.textContent = 'Activate';
           break;
 
         case 'result':
@@ -650,10 +664,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'blocked':
-          warningBanner.style.display = 'block';
-          warningBanner.className = 'warning-banner error';
-          document.getElementById('warningTitle').textContent = '🚫 Access Required';
-          document.getElementById('warningMessage').textContent = msg.message;
           outputText.innerHTML = '<div class="error-msg">' + msg.message + '</div>';
           break;
 
@@ -672,20 +682,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    function handleAuthClick() {
-      if (isLoggedIn) {
-        vscode.postMessage({ type: 'logout' });
-      } else {
-        vscode.postMessage({ type: 'login' });
-      }
-    }
-
-    function handleLogin() {
-      vscode.postMessage({ type: 'login' });
-    }
-
-
-    function handleWarningAction() {
+    function handleGetLicense() {
       vscode.postMessage({ type: 'subscribe' });
     }
 

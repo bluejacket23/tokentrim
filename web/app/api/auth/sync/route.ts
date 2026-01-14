@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser, getUser, updateUser } from '@/lib/local-db';
+
+const BACKEND_URL = process.env.BACKEND_URL || 'https://dxtbchard5.execute-api.us-east-1.amazonaws.com';
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,32 +14,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user exists
-    let user = await getUser(email);
+    // Call backend to sync user
+    const response = await fetch(`${BACKEND_URL}/auth/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name, image, provider, providerId }),
+    });
 
-    if (user) {
-      // Update existing user
-      user = await updateUser(email, {
-        name: name || user.name,
-        image: image || user.image,
-      });
-    } else {
-      // Create new user from OAuth
-      user = await createUser({
-        email,
-        name,
-        image,
-        provider: provider || 'google',
-        providerId,
-      });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Failed to sync user');
     }
 
+    const data = await response.json();
+
     return NextResponse.json({
-      id: email,
-      email: user?.email,
-      name: user?.name,
-      image: user?.image,
-      subscriptionStatus: user?.subscriptionStatus,
+      id: data.email,
+      email: data.email,
+      name: data.name,
+      image: data.image,
+      licenseKey: data.licenseKey,
+      subscriptionStatus: data.subscriptionStatus,
+      trialEndsAt: data.trialEndsAt,
+      trialDaysRemaining: data.trialDaysRemaining,
     });
   } catch (error: any) {
     console.error('Sync error:', error);
@@ -48,9 +46,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-
-
-
-
-

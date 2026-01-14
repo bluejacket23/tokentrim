@@ -68,7 +68,7 @@ export async function createUser(userData: {
     passwordHash: userData.password ? await bcrypt.hash(userData.password, 10) : undefined,
     provider: userData.provider,
     providerId: userData.providerId,
-    subscriptionStatus: 'trial', // Give new users a trial
+    subscriptionStatus: 'none', // No subscription until they pay via Stripe
     createdAt: now,
     updatedAt: now,
   };

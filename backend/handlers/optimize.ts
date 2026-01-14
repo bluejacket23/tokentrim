@@ -1,12 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import crypto from 'crypto';
-import { getApiKeyByHash, getUser, incrementUsage } from '../lib/dynamodb';
-import { success, badRequest, unauthorized, forbidden, serverError } from '../lib/response';
-
-// Hash API key
-function hashKey(key: string): string {
-  return crypto.createHash('sha256').update(key).digest('hex');
-}
+import { getUserByLicenseKey, incrementUsage, hasValidAccess } from '../lib/dynamodb';
+import { success, badRequest, unauthorized, serverError } from '../lib/response';
 
 // ============================================
 // PROMPT OPTIMIZATION ENGINE
@@ -383,25 +377,24 @@ function optimizePrompt(input: string): {
 // Lambda handler
 export async function optimize(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   try {
-    // Get API key from header
-    const apiKey = event.headers['x-api-key'] || event.headers['X-Api-Key'];
+    // Get license key from header
+    const licenseKey = event.headers['x-license-key'] || event.headers['X-License-Key'];
 
-    if (!apiKey) {
-      return unauthorized('API key is required');
+    if (!licenseKey) {
+      return unauthorized('License key is required');
     }
 
-    // Validate API key
-    const keyHash = hashKey(apiKey);
-    const keyRecord = await getApiKeyByHash(keyHash);
+    // Validate license key
+    const user = await getUserByLicenseKey(licenseKey);
 
-    if (!keyRecord) {
-      return unauthorized('Invalid API key');
+    if (!user) {
+      return unauthorized('Invalid license key');
     }
 
     // Check subscription
-    const user = await getUser(keyRecord.userId);
-    if (!user || (user.subscriptionStatus !== 'active' && user.subscriptionStatus !== 'trialing')) {
-      return forbidden('Active subscription required');
+    const accessCheck = hasValidAccess(user);
+    if (!accessCheck.valid) {
+      return unauthorized(accessCheck.reason || 'Active subscription required');
     }
 
     // Parse request body
@@ -420,7 +413,7 @@ export async function optimize(event: APIGatewayProxyEvent): Promise<APIGatewayP
     const result = optimizePrompt(text);
 
     // Track usage
-    await incrementUsage(keyRecord.userId, 1, result.originalTokens - result.optimizedTokens);
+    await incrementUsage(user.email, 1, result.originalTokens - result.optimizedTokens);
 
     return success(result);
   } catch (error: any) {

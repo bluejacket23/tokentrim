@@ -15,6 +15,10 @@ import {
   ExternalLink,
   Clock,
   RefreshCw,
+  Key,
+  Copy,
+  Check,
+  Mail,
 } from 'lucide-react';
 
 interface SubscriptionData {
@@ -23,6 +27,7 @@ interface SubscriptionData {
   trialDaysRemaining?: number;
   currentPeriodEnd?: string;
   cancelAtPeriodEnd?: boolean;
+  licenseKey?: string;
 }
 
 export default function DashboardPage() {
@@ -32,6 +37,8 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -50,13 +57,10 @@ export default function DashboardPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('success') === 'true') {
       setShowSuccess(true);
-      // Refresh subscription status after successful checkout
       setTimeout(() => {
         fetchSubscription(true);
-        // Clean up URL
         router.replace('/dashboard');
       }, 500);
-      // Hide success message after 5 seconds
       setTimeout(() => setShowSuccess(false), 5000);
     }
   }, [router]);
@@ -67,18 +71,14 @@ export default function DashboardPage() {
       const response = await fetch('/api/subscription/status');
       if (response.ok) {
         const data = await response.json();
-        console.log('Subscription status:', data);
-        // Map subscriptionStatus to status for compatibility
         setSubscription({
           status: data.subscriptionStatus || data.status || 'none',
           trialEndsAt: data.trialEndsAt,
           trialDaysRemaining: data.trialDaysRemaining,
           currentPeriodEnd: data.currentPeriodEnd,
           cancelAtPeriodEnd: data.cancelAtPeriodEnd,
+          licenseKey: data.licenseKey,
         });
-      } else {
-        const error = await response.json();
-        console.error('Failed to fetch subscription:', error);
       }
     } catch (error) {
       console.error('Failed to fetch subscription:', error);
@@ -118,6 +118,28 @@ export default function DashboardPage() {
     }
   };
 
+  const copyLicenseKey = async () => {
+    if (subscription?.licenseKey) {
+      await navigator.clipboard.writeText(subscription.licenseKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const emailLicenseKey = async () => {
+    try {
+      const response = await fetch('/api/license/email', {
+        method: 'POST',
+      });
+      if (response.ok) {
+        setEmailSent(true);
+        setTimeout(() => setEmailSent(false), 3000);
+      }
+    } catch (error) {
+      console.error('Failed to email license key:', error);
+    }
+  };
+
   if (status === 'loading' || isLoading) {
     return (
       <div className="min-h-screen bg-ink-950 flex items-center justify-center">
@@ -130,8 +152,10 @@ export default function DashboardPage() {
     return null;
   }
 
-  const hasValidAccess = subscription?.status === 'active' || 
-    (subscription?.status === 'trialing' && (subscription?.trialDaysRemaining ?? 0) > 0);
+  const hasValidAccess = subscription?.licenseKey && (
+    subscription?.status === 'active' || 
+    (subscription?.status === 'trialing' && (subscription?.trialDaysRemaining ?? 0) > 0)
+  );
 
   return (
     <div className="min-h-screen bg-ink-950">
@@ -188,6 +212,66 @@ export default function DashboardPage() {
             </p>
           </div>
 
+          {/* License Key Card - Only shown when user has subscribed */}
+          {hasValidAccess && subscription?.licenseKey && (
+            <div className="bg-gradient-to-br from-trim-500/10 to-trim-600/5 border-2 border-trim-500/30 rounded-2xl p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <Key className="w-5 h-5 text-trim-400" />
+                <h2 className="text-lg font-semibold text-ink-100">Your License Key</h2>
+              </div>
+              
+              <p className="text-ink-400 text-sm mb-4">
+                Enter this key in the TokenTrim extension to activate it.
+              </p>
+
+              <div className="bg-ink-950/50 rounded-xl p-4 flex items-center justify-between gap-4">
+                <code className="text-2xl font-mono font-bold text-trim-400 tracking-wider select-all">
+                  {subscription.licenseKey}
+                </code>
+                <div className="flex gap-2">
+                  <button
+                    onClick={copyLicenseKey}
+                    className="flex items-center gap-2 px-4 py-2 bg-trim-500 hover:bg-trim-400 text-ink-950 rounded-lg font-medium transition-colors"
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                  <button
+                    onClick={emailLicenseKey}
+                    className="flex items-center gap-2 px-4 py-2 bg-ink-800 hover:bg-ink-700 text-ink-200 rounded-lg font-medium transition-colors"
+                    title="Email license key to yourself"
+                  >
+                    {emailSent ? <Check className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+                    {emailSent ? 'Sent!' : 'Email'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Subscribe CTA for new users */}
+          {(!subscription?.status || subscription.status === 'none') && (
+            <div className="bg-gradient-to-br from-trim-500/20 to-trim-600/10 border-2 border-trim-500/40 rounded-2xl p-8 text-center">
+              <div className="w-16 h-16 bg-trim-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Key className="w-8 h-8 text-trim-400" />
+              </div>
+              <h2 className="text-2xl font-bold text-ink-100 mb-2">Get Started with TokenTrim</h2>
+              <p className="text-ink-400 mb-6 max-w-md mx-auto">
+                Subscribe to get your license key and start optimizing your AI prompts. 
+                Includes a <span className="text-trim-400 font-semibold">7-day free trial</span>!
+              </p>
+              <button
+                onClick={handleSubscribe}
+                className="btn-primary text-lg px-8 py-3"
+              >
+                Start Free Trial - $2.99/mo after
+              </button>
+              <p className="text-ink-500 text-sm mt-3">
+                Cancel anytime. No charge during trial period.
+              </p>
+            </div>
+          )}
+
           {/* Subscription Status Card */}
           <div className="bg-ink-900/50 border border-ink-800 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-6">
@@ -199,7 +283,6 @@ export default function DashboardPage() {
                 onClick={() => fetchSubscription(true)}
                 disabled={isRefreshing}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm text-ink-400 hover:text-ink-200 hover:bg-ink-800 rounded-lg transition-colors disabled:opacity-50"
-                title="Refresh subscription status"
               >
                 <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
@@ -215,22 +298,17 @@ export default function DashboardPage() {
                   <h3 className="text-lg font-semibold text-ink-100">Pro Plan Active</h3>
                   {subscription.cancelAtPeriodEnd ? (
                     <p className="text-yellow-400 text-sm mt-1">
-                      ⚠️ Subscription will cancel on{' '}
-                      {subscription.currentPeriodEnd
+                      ⚠️ Cancels on {subscription.currentPeriodEnd
                         ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
                         : 'N/A'}
                     </p>
                   ) : (
                     <p className="text-ink-400 text-sm mt-1">
-                      Your subscription renews on{' '}
-                      {subscription.currentPeriodEnd
+                      Renews {subscription.currentPeriodEnd
                         ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
                         : 'N/A'}
                     </p>
                   )}
-                  <p className="text-ink-500 text-xs mt-2">
-                    Manage your subscription, update payment method, or cancel anytime.
-                  </p>
                   <button
                     onClick={handleManageSubscription}
                     className="mt-4 text-trim-400 hover:text-trim-300 text-sm font-medium flex items-center gap-1"
@@ -250,12 +328,9 @@ export default function DashboardPage() {
                   <h3 className="text-lg font-semibold text-ink-100">Free Trial Active</h3>
                   <p className="text-ink-400 text-sm mt-1">
                     {subscription.trialDaysRemaining} days remaining
-                    {subscription.trialEndsAt && (
-                      <> (ends {new Date(subscription.trialEndsAt).toLocaleDateString()})</>
-                    )}
                   </p>
                   <p className="text-ink-500 text-xs mt-2">
-                    Your subscription will automatically activate after the trial ends. You can cancel anytime.
+                    Your trial will convert to a paid subscription automatically.
                   </p>
                   <button
                     onClick={handleManageSubscription}
@@ -275,7 +350,7 @@ export default function DashboardPage() {
                 <div className="flex-1">
                   <h3 className="text-lg font-semibold text-ink-100">Payment Required</h3>
                   <p className="text-ink-400 text-sm mt-1">
-                    Your payment failed. Please update your payment method to continue using TokenTrim.
+                    Please update your payment method to continue.
                   </p>
                   <button
                     onClick={handleManageSubscription}
@@ -287,22 +362,36 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {(!subscription?.status || subscription.status === 'none' || subscription.status === 'canceled') && (
+            {subscription?.status === 'canceled' && (
               <div className="flex items-start gap-4">
                 <div className="w-12 h-12 bg-red-500/10 rounded-xl flex items-center justify-center">
                   <AlertTriangle className="w-6 h-6 text-red-400" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-ink-100">No Active Subscription</h3>
+                  <h3 className="text-lg font-semibold text-ink-100">Subscription Canceled</h3>
                   <p className="text-ink-400 text-sm mt-1">
-                    Subscribe to use the TokenTrim extension and save on AI tokens.
+                    Your license key is no longer active. Resubscribe to continue using TokenTrim.
                   </p>
                   <button
                     onClick={handleSubscribe}
                     className="mt-4 btn-primary text-sm"
                   >
-                    Subscribe Now - $2.99/mo
+                    Resubscribe - $2.99/mo
                   </button>
+                </div>
+              </div>
+            )}
+
+            {(!subscription?.status || subscription.status === 'none') && (
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-ink-800 rounded-xl flex items-center justify-center">
+                  <CreditCard className="w-6 h-6 text-ink-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-ink-100">No Subscription Yet</h3>
+                  <p className="text-ink-400 text-sm mt-1">
+                    Subscribe above to get your license key and start your 7-day free trial.
+                  </p>
                 </div>
               </div>
             )}
@@ -317,13 +406,15 @@ export default function DashboardPage() {
 
             <div className="space-y-4">
               <div className="flex items-start gap-4">
-                <div className="w-8 h-8 bg-trim-500/10 rounded-lg flex items-center justify-center text-trim-400 font-bold text-sm">
-                  1
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${hasValidAccess ? 'bg-trim-500/20 text-trim-400' : 'bg-trim-500/10 text-trim-400'}`}>
+                  {hasValidAccess ? '✓' : '1'}
                 </div>
                 <div>
-                  <h3 className="font-medium text-ink-100">Install the Extension</h3>
+                  <h3 className="font-medium text-ink-100">Subscribe to TokenTrim</h3>
                   <p className="text-ink-400 text-sm mt-1">
-                    Search for "TokenTrim" in VS Code or Cursor extensions marketplace.
+                    {hasValidAccess 
+                      ? 'You have an active subscription!'
+                      : 'Start your 7-day free trial with a credit card.'}
                   </p>
                 </div>
               </div>
@@ -333,9 +424,9 @@ export default function DashboardPage() {
                   2
                 </div>
                 <div>
-                  <h3 className="font-medium text-ink-100">Sign In</h3>
+                  <h3 className="font-medium text-ink-100">Install the Extension</h3>
                   <p className="text-ink-400 text-sm mt-1">
-                    Click "Sign In" in the extension sidebar. You'll be redirected to sign in with the same account.
+                    Search for "TokenTrim" in VS Code or Cursor extensions.
                   </p>
                 </div>
               </div>
@@ -345,21 +436,27 @@ export default function DashboardPage() {
                   3
                 </div>
                 <div>
+                  <h3 className="font-medium text-ink-100">Enter Your License Key</h3>
+                  <p className="text-ink-400 text-sm mt-1">
+                    {hasValidAccess 
+                      ? 'Copy your license key above and paste it in the extension.'
+                      : 'After subscribing, your license key will appear above.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div className="w-8 h-8 bg-trim-500/10 rounded-lg flex items-center justify-center text-trim-400 font-bold text-sm">
+                  4
+                </div>
+                <div>
                   <h3 className="font-medium text-ink-100">Start Optimizing</h3>
                   <p className="text-ink-400 text-sm mt-1">
-                    Paste your prompts and watch TokenTrim optimize them in real-time!
+                    Paste your prompts and watch them get optimized in real-time!
                   </p>
                 </div>
               </div>
             </div>
-
-            {!hasValidAccess && (
-              <div className="mt-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
-                <p className="text-yellow-400 text-sm">
-                  ⚠️ You need an active subscription to use the extension. Subscribe above to get started!
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Account Card */}

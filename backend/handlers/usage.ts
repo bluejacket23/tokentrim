@@ -1,33 +1,26 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import crypto from 'crypto';
-import { getApiKeyByHash, getOrCreateUsage, incrementUsage, getUser } from '../lib/dynamodb';
-import { success, badRequest, unauthorized, forbidden, serverError } from '../lib/response';
-
-// Hash API key
-function hashKey(key: string): string {
-  return crypto.createHash('sha256').update(key).digest('hex');
-}
+import { getUserByLicenseKey, getOrCreateUsage, incrementUsage, getUser } from '../lib/dynamodb';
+import { success, badRequest, unauthorized, serverError } from '../lib/response';
 
 export async function track(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   try {
-    const apiKey = event.headers['x-api-key'] || event.headers['X-Api-Key'];
+    const licenseKey = event.headers['x-license-key'] || event.headers['X-License-Key'];
 
-    if (!apiKey) {
-      return unauthorized('API key is required');
+    if (!licenseKey) {
+      return unauthorized('License key is required');
     }
 
-    // Validate API key
-    const keyHash = hashKey(apiKey);
-    const keyRecord = await getApiKeyByHash(keyHash);
+    // Validate license key
+    const user = await getUserByLicenseKey(licenseKey);
 
-    if (!keyRecord) {
-      return unauthorized('Invalid API key');
+    if (!user) {
+      return unauthorized('Invalid license key');
     }
 
     const body = JSON.parse(event.body || '{}');
     const { promptsOptimized = 1, tokensSaved = 0 } = body;
 
-    await incrementUsage(keyRecord.userId, promptsOptimized, tokensSaved);
+    await incrementUsage(user.email, promptsOptimized, tokensSaved);
 
     return success({ message: 'Usage tracked successfully' });
   } catch (error: any) {
@@ -38,27 +31,26 @@ export async function track(event: APIGatewayProxyEvent): Promise<APIGatewayProx
 
 export async function getUsage(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   try {
-    const apiKey = event.headers['x-api-key'] || event.headers['X-Api-Key'];
+    const licenseKey = event.headers['x-license-key'] || event.headers['X-License-Key'];
     const email = event.queryStringParameters?.email;
 
-    // Can get usage via API key or email
+    // Can get usage via license key or email
     let userId: string;
 
-    if (apiKey) {
-      const keyHash = hashKey(apiKey);
-      const keyRecord = await getApiKeyByHash(keyHash);
+    if (licenseKey) {
+      const user = await getUserByLicenseKey(licenseKey);
 
-      if (!keyRecord) {
-        return unauthorized('Invalid API key');
+      if (!user) {
+        return unauthorized('Invalid license key');
       }
-      userId = keyRecord.userId;
+      userId = user.email;
     } else if (email) {
       userId = email;
     } else {
-      return badRequest('API key or email is required');
+      return badRequest('License key or email is required');
     }
 
-    // Check subscription
+    // Check user exists
     const user = await getUser(userId);
     if (!user) {
       return unauthorized('User not found');
@@ -77,25 +69,3 @@ export async function getUsage(event: APIGatewayProxyEvent): Promise<APIGatewayP
     return serverError(error.message);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

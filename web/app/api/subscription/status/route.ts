@@ -2,75 +2,73 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getSubscriptionStatus } from '@/lib/stripe';
-import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'your-jwt-secret';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://dxtbchard5.execute-api.us-east-1.amazonaws.com';
 
 export async function GET(req: NextRequest) {
   try {
-    // Check for Bearer token (from extension) or NextAuth session (from web)
-    const authHeader = req.headers.get('authorization');
-    let userEmail: string | null = null;
-
-    if (authHeader?.startsWith('Bearer ')) {
-      // Extension authentication
-      const token = authHeader.replace('Bearer ', '');
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET) as any;
-        userEmail = decoded.email?.toLowerCase();
-      } catch {
-        return NextResponse.json(
-          { error: 'Invalid token' },
-          { status: 401 }
-        );
-      }
-    } else {
-      // Web authentication
-      const session = await getServerSession(authOptions);
-      userEmail = session?.user?.email?.toLowerCase() || null;
-    }
+    // Get user from NextAuth session
+    const session = await getServerSession(authOptions);
+    const userEmail = session?.user?.email?.toLowerCase();
 
     if (!userEmail) {
-      // Also check query param as fallback
-      const emailParam = req.nextUrl.searchParams.get('email');
-      if (emailParam) {
-        userEmail = emailParam.toLowerCase();
-      } else {
-        return NextResponse.json(
-          { error: 'Unauthorized' },
-          { status: 401 }
-        );
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Fetch user data from backend (includes license key)
+    let userData: any = null;
+    try {
+      const backendRes = await fetch(`${BACKEND_URL}/users?email=${encodeURIComponent(userEmail)}`);
+      if (backendRes.ok) {
+        userData = await backendRes.json();
       }
+    } catch (e) {
+      console.error('Failed to fetch user from backend:', e);
     }
 
     // Get subscription status from Stripe
     const stripeStatus = await getSubscriptionStatus(userEmail);
 
-    // Calculate trial info from session if no Stripe subscription
-    const sessionUser = session.user as any;
-    
     if (!stripeStatus) {
-      // User has no Stripe subscription - check trial status
-      const trialEndsAt = sessionUser.trialEndsAt;
-      let trialDaysRemaining = sessionUser.trialDaysRemaining || 7;
-      let subscriptionStatus = sessionUser.subscriptionStatus || 'trialing';
+      // User has no Stripe subscription - use backend data
+      const subscriptionStatus = userData?.subscriptionStatus || 'none';
+      const trialEndsAt = userData?.trialEndsAt;
+      let trialDaysRemaining = 0;
 
-      if (trialEndsAt) {
+      if (trialEndsAt && subscriptionStatus === 'trialing') {
         const now = new Date();
         const trialEnd = new Date(trialEndsAt);
         const diffMs = trialEnd.getTime() - now.getTime();
         trialDaysRemaining = Math.max(0, Math.ceil(diffMs / (24 * 60 * 60 * 1000)));
-        
-        if (trialDaysRemaining === 0 && subscriptionStatus === 'trialing') {
-          subscriptionStatus = 'expired';
-        }
       }
 
+      // Valid access only if trialing with days remaining, or active
+      const hasValidAccess = 
+        subscriptionStatus === 'active' || 
+        (subscriptionStatus === 'trialing' && trialDaysRemaining > 0);
+
       return NextResponse.json({
-        subscriptionStatus,
+        subscriptionStatus: trialDaysRemaining === 0 && subscriptionStatus === 'trialing' ? 'expired' : subscriptionStatus,
         trialEndsAt,
         trialDaysRemaining,
-        hasValidAccess: subscriptionStatus === 'trialing' && trialDaysRemaining > 0,
+        hasValidAccess,
+        licenseKey: userData?.licenseKey,
+      });
+    }
+
+    // Only trust Stripe status if user has a license key in our system
+    // This prevents showing active status for old/external subscriptions
+    if (!userData?.licenseKey) {
+      // User has Stripe subscription but no license key = they didn't go through our flow
+      // Treat as no subscription
+      return NextResponse.json({
+        subscriptionStatus: 'none',
+        trialDaysRemaining: 0,
+        hasValidAccess: false,
+        licenseKey: null,
       });
     }
 
@@ -97,6 +95,7 @@ export async function GET(req: NextRequest) {
       currentPeriodEnd: stripeStatus.currentPeriodEnd,
       cancelAtPeriodEnd: stripeStatus.cancelAtPeriodEnd,
       hasValidAccess,
+      licenseKey: userData?.licenseKey,
     });
   } catch (error: any) {
     console.error('Subscription status error:', error);
@@ -106,4 +105,3 @@ export async function GET(req: NextRequest) {
     );
   }
 }
-

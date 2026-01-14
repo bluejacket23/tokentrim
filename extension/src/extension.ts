@@ -22,30 +22,18 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Register URI handler for OAuth callback
-  context.subscriptions.push(
-    vscode.window.registerUriHandler({
-      handleUri: async (uri: vscode.Uri) => {
-        if (uri.path === '/auth/callback') {
-          await handleAuthCallback(uri);
-        }
-      }
-    })
-  );
-
   // Register commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.login', async () => {
-      await handleLogin();
+    vscode.commands.registerCommand('tokentrim.setLicenseKey', async () => {
+      await handleSetLicenseKey();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tokentrim.logout', async () => {
-      await handleLogout();
+    vscode.commands.registerCommand('tokentrim.clearLicenseKey', async () => {
+      await handleClearLicenseKey();
     })
   );
-
 
   context.subscriptions.push(
     vscode.commands.registerCommand('tokentrim.copyOptimized', () => {
@@ -66,114 +54,78 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Load existing session on startup
-  initializeSession();
+  // Load existing license key on startup
+  initializeLicense();
 }
 
-async function initializeSession() {
-  const session = await apiClient.loadSession();
+async function initializeLicense() {
+  const licenseKey = await apiClient.loadLicenseKey();
   
-  if (session) {
-    // Refresh subscription status in background
-    const status = await apiClient.refreshSubscriptionStatus();
+  if (licenseKey) {
+    // Validate the stored license key
+    const result = await apiClient.validateLicenseKey();
     
-    if (status.valid) {
-      if (status.status === 'trialing' && status.trialDaysRemaining) {
+    if (result.valid) {
+      if (result.subscriptionStatus === 'trialing' && result.trialDaysRemaining) {
         vscode.window.showInformationMessage(
-          `TokenTrim: Welcome back! ${status.trialDaysRemaining} days left in your trial.`
+          `TokenTrim: ${result.trialDaysRemaining} days left in your trial.`
         );
       }
     } else {
       vscode.window.showWarningMessage(
-        status.message || 'TokenTrim: Please subscribe to continue.',
-        'Subscribe'
+        result.message || 'TokenTrim: License expired. Please subscribe to continue.',
+        'Get License'
       ).then(action => {
-        if (action === 'Subscribe') {
+        if (action === 'Get License') {
           vscode.commands.executeCommand('tokentrim.subscribe');
         }
       });
     }
   }
 
-  chatPanelProvider.updateAuthStatus();
+  chatPanelProvider.updateLicenseStatus();
 }
 
-async function handleLogin() {
-  try {
-    const loginUrl = apiClient.getLoginUrl();
+async function handleSetLicenseKey() {
+  const key = await vscode.window.showInputBox({
+    prompt: 'Enter your TokenTrim license key',
+    placeHolder: 'TT-XXXX-XXXX-XXXX',
+    password: false,
+    validateInput: (value) => {
+      if (!value) return 'License key is required';
+      if (!value.startsWith('TT-')) return 'License key should start with TT-';
+      return null;
+    }
+  });
+
+  if (!key) return;
+
+  // Validate the key
+  const result = await apiClient.validateLicenseKey(key);
+  
+  if (result.valid) {
+    chatPanelProvider.updateLicenseStatus();
     
-    // Open browser to login page
-    const opened = await vscode.env.openExternal(vscode.Uri.parse(loginUrl));
-    
-    if (opened) {
+    if (result.subscriptionStatus === 'trialing' && result.trialDaysRemaining) {
       vscode.window.showInformationMessage(
-        'TokenTrim: Complete sign-in in your browser, then return here.'
+        `Welcome to TokenTrim! You have ${result.trialDaysRemaining} days left in your free trial.`
       );
     } else {
-      vscode.window.showErrorMessage(
-        'TokenTrim: Could not open browser. Please visit tokentrim.com to sign in.'
+      vscode.window.showInformationMessage(
+        `TokenTrim activated! Welcome${result.name ? ', ' + result.name : ''}!`
       );
     }
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error.message}`);
+  } else {
+    vscode.window.showErrorMessage(
+      result.message || 'Invalid license key. Please check and try again.'
+    );
   }
 }
 
-async function handleAuthCallback(uri: vscode.Uri) {
-  try {
-    const params = new URLSearchParams(uri.query);
-    const code = params.get('code');
-    const state = params.get('state');
-    const error = params.get('error');
-
-    if (error) {
-      vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error}`);
-      return;
-    }
-
-    if (!code || !state) {
-      vscode.window.showErrorMessage('TokenTrim: Invalid auth callback');
-      return;
-    }
-
-    // Exchange code for session
-    const session = await apiClient.exchangeAuthCode(code, state);
-    
-    // Update UI
-    chatPanelProvider.updateAuthStatus();
-
-    // Show welcome message based on subscription status
-    const status = apiClient.getSubscriptionStatus();
-    
-    if (status.valid) {
-      if (status.status === 'trialing') {
-        vscode.window.showInformationMessage(
-          `Welcome to TokenTrim, ${session.name || session.email}! You have ${status.trialDaysRemaining} days left in your free trial.`
-        );
-      } else {
-        vscode.window.showInformationMessage(
-          `Welcome back, ${session.name || session.email}! TokenTrim is ready.`
-        );
-      }
-    } else {
-      vscode.window.showWarningMessage(
-        'TokenTrim: Your trial has expired. Subscribe to continue optimizing prompts.',
-        'Subscribe'
-      ).then(action => {
-        if (action === 'Subscribe') {
-          vscode.commands.executeCommand('tokentrim.subscribe');
-        }
-      });
-    }
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`TokenTrim: Login failed - ${error.message}`);
-  }
-}
-
-async function handleLogout() {
-  await apiClient.logout();
-  chatPanelProvider.updateAuthStatus();
-  vscode.window.showInformationMessage('TokenTrim: Signed out successfully.');
+async function handleClearLicenseKey() {
+  await apiClient.clearLicenseKey();
+  chatPanelProvider.updateLicenseStatus();
+  vscode.window.showInformationMessage('TokenTrim: License key removed.');
 }
 
 export function deactivate() {}

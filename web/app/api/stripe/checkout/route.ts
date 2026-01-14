@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     }
 
     const checkoutSession = await createCheckoutSession(
-      (session.user as any).id || session.user.email,
+      session.user.email.toLowerCase(),  // Always use email as userId
       session.user.email
     );
 
